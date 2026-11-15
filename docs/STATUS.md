@@ -1,6 +1,6 @@
 # M1 implementation and verification status
 
-Updated on **2026-11-15 UTC** on macOS arm64. Discovery now uses a terminal CLI with rich; provider setup, structured LLM checks and persistent manual review decisions are implemented. Scientific matching/scoring, CV extraction, document drafts and M4–M5 remain deferred. Historical public-source checks below used Python 3.12.13; current offline validation uses Python 3.14.7.
+Updated on **2026-11-15 UTC** on macOS arm64. Discovery now uses a terminal CLI with rich; provider setup, structured LLM checks and persistent manual review decisions are implemented. Scientific matching/scoring, CV extraction, document drafts and M4–M5 remain deferred. Historical public-source checks below used Python 3.12.13; current offline validation passes on Python 3.12.13 and 3.14.7.
 
 ## Working: verified public feeds
 
@@ -39,8 +39,8 @@ Fallback for either source: retain cached listings and source error/last-seen in
 ## Validation actually performed
 
 - Locked native dependencies install with `uv sync --frozen`; the project now depends on rich and has no web UI dependency.
-- `uv run pytest`: **133 offline tests pass** (2 live tests deselected). The offline suite blocks sockets and mocks LLM HTTP/subprocess calls. It covers all seven backends, schema format negotiation, strict Pydantic validation, rate/quota errors, fallback settings and cooldown persistence across launches. Terminal tests cover help, list/filter/export, source health/stats, first-run setup, hidden-key storage, re-runnable setup, and persisted save/reject/later decisions surviving source refreshes.
-- A native `./setup.sh` install and re-run passed with an actual local JSON stub through the command backend (no external LLM request); `doctor`, fixture-backed `list`/`export`, `stats` and `llm-check` exited 0.
+- `uv run pytest`: **133 offline tests pass** on Python **3.12.13** and **3.14.7** (2 live tests deselected). The offline suite blocks sockets and mocks LLM HTTP/subprocess calls. It covers all seven backends, schema format negotiation, strict Pydantic validation, rate/quota errors, fallback settings and cooldown persistence across launches. Terminal tests cover help, list/filter/export, source health/stats, first-run setup, hidden-key storage, re-runnable setup, and persisted save/reject/later decisions surviving source refreshes.
+- A native `./setup.sh` install and re-run passed with an actual local JSON stub through the command backend (no external LLM request); `doctor`, fixture-backed `list`/`export`, `stats` and `llm-check` exited 0. A real terminal review accepted single s/q keys without Enter and persisted the saved decision in SQLite.
 - The shell installer is tested from another working directory with a fake uv executable; it runs locked dependency sync, database init and setup in order on repeated runs. It only installs missing uv after explicit terminal consent. No scheduler is installed.
 - `uv run ruff check app tests` and `uv run ruff format --check app tests` are required and run locally before delivery.
 - The previous discovery live check (`uv run pytest --live -m live -s`) passed both configured ATS APIs and persisted 11 matching jobs (1 Mytos + 10 Isomorphic); it was not repeated for the LLM change. Discovery integration fixtures still pass offline.
