@@ -1,0 +1,22 @@
+# Example preferences, not candidate qualifications. Copy to candidate.yaml (gitignored).
+name: Example candidate
+reviewed: false
+specialties: []  # No scientific specialty is assumed or scored in M1.
+target_titles:
+  - Principal Scientist
+  - Senior Principal Scientist
+  - Principal Research Scientist
+  - Staff Scientist
+  - Lead Scientist
+  - Scientific Lead
+  - Research Leader
+  - Senior Research Investigator
+# London includes Greater London boroughs. Other regions are independent switches.
+regions:
+  london: true
+  slough: false
+  stevenage: false
+  uxbridge: false
+  cambridge: false
+  oxford: false
+include_unknown_location: true

@@ -1,0 +1,32 @@
+# Only reviewed commercial employers. Never add universities or general aggregators.
+sources:
+  - id: mytos-lever
+    adapter: lever
+    board: mytos
+    employer: Mytos
+    industry: cdmo
+    industry_verified: true
+    employer_url: https://www.mytos.bio/
+    review_url: https://jobs.lever.co/mytos
+    enabled: true
+    min_interval_seconds: 900
+  - id: isomorphic-greenhouse
+    adapter: greenhouse
+    board: isomorphiclabs
+    employer: Isomorphic Labs
+    industry: biotech
+    industry_verified: true
+    employer_url: https://www.isomorphiclabs.com/
+    review_url: https://job-boards.greenhouse.io/isomorphiclabs
+    enabled: true
+    min_interval_seconds: 900
+  - id: recursion-greenhouse
+    adapter: greenhouse
+    board: recursionpharmaceuticals
+    employer: Recursion
+    industry: biotech
+    industry_verified: true
+    employer_url: https://www.recursion.com/
+    review_url: https://job-boards.greenhouse.io/recursionpharmaceuticals
+    enabled: false  # Verified feed, no London locations returned on 2026-11-15.
+    min_interval_seconds: 900

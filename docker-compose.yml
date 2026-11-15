@@ -1,0 +1,15 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      BIO_DATABASE_PATH: /app/data/jobs.sqlite3
+      BIO_CANDIDATE_PATH: ${BIO_CANDIDATE_PATH:-/app/config/candidate.example.yaml}
+      BIO_SOURCES_PATH: ${BIO_SOURCES_PATH:-/app/config/sources.yaml}
+    volumes:
+      - job_data:/app/data
+      - ./config:/app/config:ro
+    restart: unless-stopped
+volumes:
+  job_data:
