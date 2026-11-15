@@ -256,3 +256,16 @@ def test_invalid_config_and_missing_keys_are_diagnosed(configured):
     )
     assert cli.main(["doctor"]) == 1
     assert "BIO_MISSING_TEST_KEY" in output.getvalue()
+
+
+def test_firms_validation_dispatch_needs_no_llm_or_database(configured, monkeypatch):
+    cfg, _ = configured
+    cfg.config_path.unlink()
+    calls = []
+    monkeypatch.setattr(cli, "connect", lambda *a: pytest.fail("Unexpected database access"))
+    monkeypatch.setattr(
+        cli, "run_firms_command", lambda args, **kw: calls.append(args.validate) or 1
+    )
+    assert cli.main(["firms", "--validate"]) == 1
+    assert calls == [True]
+    assert not cfg.database_path.exists()

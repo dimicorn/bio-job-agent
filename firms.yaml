@@ -1,0 +1,191 @@
+# London / Golden Triangle commercial life-sciences watchlist.
+# Verified 2026-11-15 using public GETs, BioJobAgent robots rules and pacing.
+# Recheck every board and employer identity: bio-jobs firms --validate
+# token: public ATS slug, or an exact verified HTTPS careers URL for site.
+# tier: 1 = priority, 2 = broader scientific coverage, 3 = supporting suppliers.
+# evidence_url + industry_evidence record the employer's own industry evidence.
+# area is watchlist context; individual jobs still pass the candidate region filters.
+# site without links: a content-hashed public page snapshot, retained in raw_postings
+# for manual review; generic career-page updates are not advertised as scientist jobs.
+# This does not query undocumented Workday APIs or execute JavaScript.
+#
+# No compliant public ATS feed found/usable on this check:
+# GSK, AstraZeneca, Lonza: own career pages / Workday; use verified site watchers below.
+# LabGenius: own careers page (Teamtailor, outside the API adapters); site watcher.
+# RxCelerate: own careers page; site watcher.
+# Autolus (London/Stevenage): https://www.autolus.com/careers/ links to
+# autolus.wd103.myworkdayjobs.com, but direct public GET returned HTTP 403;
+# excluded rather than bypassing access restrictions or inventing a Workday API.
+# Relation (relationrx), Genomics (genomics), Lindus Health (lindus): Ashby boards
+# identified from public employer postings. api.ashbyhq.com/robots.txt returned 401;
+# the client refuses access before requesting the job API, so these are NOT verified
+# API boards and are excluded. The adapter remains available for permitted boards.
+
+firms:
+  - name: Mytos
+    ats: lever
+    token: mytos
+    tier: 1
+    industry: cdmo
+    employer_url: https://www.mytos.bio/
+    evidence_url: https://jobs.lever.co/mytos
+    industry_evidence: Automated human cell production for drug discovery and cell therapies.
+    area: London
+    review_url: https://jobs.lever.co/mytos
+    verified_on: '2026-11-15'
+
+  - name: Isomorphic Labs
+    ats: greenhouse
+    token: isomorphiclabs
+    tier: 1
+    industry: biotech
+    employer_url: https://www.isomorphiclabs.com/
+    evidence_url: https://job-boards.greenhouse.io/isomorphiclabs
+    industry_evidence: Commercial AI-driven drug discovery with laboratory and computational science teams.
+    area: London
+    review_url: https://job-boards.greenhouse.io/isomorphiclabs
+    verified_on: '2026-11-15'
+
+  - name: bit.bio
+    ats: greenhouse
+    token: bitbio
+    tier: 1
+    industry: biotech
+    employer_url: https://www.bit.bio/
+    evidence_url: https://job-boards.greenhouse.io/bitbio
+    industry_evidence: Human cell reprogramming for research, drug discovery and cell therapy at Babraham Campus.
+    area: Cambridge
+    review_url: https://job-boards.greenhouse.io/bitbio
+    verified_on: '2026-11-15'
+
+  - name: Cycle Pharmaceuticals
+    ats: greenhouse
+    token: cyclepharmaceuticals
+    tier: 2
+    industry: pharma
+    employer_url: https://cyclepharma.com/
+    evidence_url: https://job-boards.greenhouse.io/cyclepharmaceuticals
+    industry_evidence: Rare disease pharmaceutical treatments, clinical development and technical operations.
+    area: Cambridge
+    review_url: https://job-boards.greenhouse.io/cyclepharmaceuticals
+    verified_on: '2026-11-15'
+
+  - name: Altos Labs
+    ats: greenhouse
+    token: altoslabs
+    tier: 1
+    industry: biotech
+    employer_url: https://altoslabs.com/
+    evidence_url: https://job-boards.greenhouse.io/altoslabs
+    industry_evidence: Commercial cell rejuvenation biotechnology with a multiomics technology hub in Cambridge UK.
+    area: Cambridge
+    review_url: https://job-boards.greenhouse.io/altoslabs
+    verified_on: '2026-11-15'
+
+  - name: Quotient Therapeutics
+    ats: greenhouse
+    token: quotient
+    tier: 1
+    industry: biotech
+    employer_url: https://www.quotient-tx.com/
+    evidence_url: https://job-boards.greenhouse.io/quotient
+    industry_evidence: Somatic genomics drug target discovery with UK biobank and data science roles.
+    area: Cambridge
+    review_url: https://job-boards.greenhouse.io/quotient
+    verified_on: '2026-11-15'
+
+  - name: OGT
+    ats: greenhouse
+    token: ogt
+    tier: 3
+    industry: commercial_life_sciences
+    employer_url: https://www.ogt.com/
+    evidence_url: https://job-boards.greenhouse.io/ogt
+    industry_evidence: Commercial hybridisation, clinical research and genetic diagnostic solutions.
+    area: Oxford / Cambridge
+    review_url: https://job-boards.greenhouse.io/ogt
+    verified_on: '2026-11-15'
+
+  - name: OMass Therapeutics
+    ats: workable
+    token: omass-therapeutics
+    tier: 1
+    industry: biotech
+    employer_url: https://www.omass.com/
+    evidence_url: https://apply.workable.com/omass-therapeutics/
+    industry_evidence: Oxford biotechnology developing small molecule therapeutics using native mass spectrometry.
+    area: Oxford
+    review_url: https://apply.workable.com/omass-therapeutics/
+    verified_on: '2026-11-15'
+
+  - name: biomodal
+    ats: workable
+    token: biomodal
+    tier: 2
+    industry: biotech
+    employer_url: https://biomodal.com/
+    evidence_url: https://apply.workable.com/biomodal/
+    industry_evidence: Commercial genetics and epigenetics sequencing technology, formerly Cambridge Epigenetix.
+    area: Cambridge / Chesterford Research Park
+    review_url: https://apply.workable.com/biomodal/
+    verified_on: '2026-11-15'
+
+  - name: GSK
+    ats: site
+    token: https://www.gsk.com/en-gb/careers/
+    tier: 1
+    industry: pharma
+    employer_url: https://www.gsk.com/
+    evidence_url: https://www.gsk.com/en-gb/careers/
+    industry_evidence: Pharmaceutical research, medicines, vaccines and chemical manufacturing and controls.
+    area: London / Stevenage
+    review_url: https://www.gsk.com/en-gb/careers/
+    verified_on: '2026-11-15'
+
+  - name: AstraZeneca
+    ats: site
+    token: https://careers.astrazeneca.com/
+    tier: 1
+    industry: biopharma
+    employer_url: https://www.astrazeneca.com/
+    evidence_url: https://careers.astrazeneca.com/
+    industry_evidence: Biopharmaceuticals and oncology research and development, discovery and operations.
+    area: Cambridge / London
+    review_url: https://careers.astrazeneca.com/
+    verified_on: '2026-11-15'
+
+  - name: Lonza
+    ats: site
+    token: https://www.lonza.com/careers/job-search
+    tier: 1
+    industry: cdmo
+    employer_url: https://www.lonza.com/
+    evidence_url: https://www.lonza.com/careers
+    industry_evidence: Customer drug development and manufacturing from gene to patient, biologics and synthesis.
+    area: Slough / Cambridge
+    review_url: https://www.lonza.com/careers/job-search
+    verified_on: '2026-11-15'
+
+  - name: LabGenius
+    ats: site
+    token: https://labgeniustx.com/careers/
+    tier: 1
+    industry: biotech
+    employer_url: https://labgeniustx.com/
+    evidence_url: https://labgeniustx.com/careers/
+    industry_evidence: London therapeutic antibody discovery combining machine learning and laboratory experimentation.
+    area: London
+    review_url: https://labgeniustx.com/careers/
+    verified_on: '2026-11-15'
+
+  - name: RxCelerate
+    ats: site
+    token: https://www.rxcelerate.com/careers/
+    tier: 2
+    industry: cro
+    employer_url: https://www.rxcelerate.com/
+    evidence_url: https://www.rxcelerate.com/about-us/
+    industry_evidence: Contract drug discovery and development platform serving biotech and pharmaceutical customers.
+    area: Cambridge
+    review_url: https://www.rxcelerate.com/careers/
+    verified_on: '2026-11-15'

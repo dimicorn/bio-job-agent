@@ -8,12 +8,10 @@ import httpx
 from app.candidate.profile import import_profile
 from app.pipeline.dedupe import store_job
 from app.pipeline.filter import exclusion
-from app.sources.ats.greenhouse import Greenhouse
-from app.sources.ats.lever import Lever
 from app.sources.base import PublicClient, RateLimited
+from app.sources.registry import ADAPTERS
 
 LOG = logging.getLogger(__name__)
-ADAPTERS = {"greenhouse": Greenhouse, "lever": Lever}
 
 
 def utcnow():

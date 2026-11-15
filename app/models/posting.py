@@ -1,13 +1,14 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator, model_validator
 
 
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    adapter: Literal["greenhouse", "lever"]
+    adapter: Literal["greenhouse", "lever", "ashby", "workable", "site"]
     board: str
+    links: str = ""
     employer: str
     industry: Literal["biotech", "biopharma", "pharma", "cro", "cdmo", "commercial_life_sciences"]
     industry_verified: bool = False
@@ -16,7 +17,7 @@ class SourceConfig(BaseModel):
     enabled: bool = True
     min_interval_seconds: int = 900
 
-    @field_validator("board", "id")
+    @field_validator("id")
     @classmethod
     def safe_slug(cls, value: str) -> str:
         import re
@@ -24,6 +25,20 @@ class SourceConfig(BaseModel):
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
             raise ValueError("Expected a public board slug")
         return value
+
+    @model_validator(mode="after")
+    def valid_board(self):
+        import re
+
+        if self.adapter == "site":
+            Posting.public_link(self.board)
+        elif not re.fullmatch(r"[a-zA-Z0-9_-]+", self.board):
+            raise ValueError("Expected a public board slug")
+        if self.links:
+            if self.adapter != "site":
+                raise ValueError("links is only supported for site sources")
+            re.compile(self.links)
+        return self
 
     @field_validator("min_interval_seconds")
     @classmethod

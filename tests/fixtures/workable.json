@@ -1,0 +1,36 @@
+{
+  "name": "OMass Therapeutics",
+  "description": "Synthetic fixture employer summary.",
+  "jobs": [
+    {
+      "title": "Discovery DMPK Scientist (Senior Scientist II / Principal Scientist)",
+      "shortcode": "DED18CF9F9",
+      "code": "",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Discovery and Non-Clinical",
+      "url": "https://apply.workable.com/j/DED18CF9F9",
+      "shortlink": "https://apply.workable.com/j/DED18CF9F9",
+      "application_url": "https://apply.workable.com/j/DED18CF9F9/apply",
+      "published_on": "2026-10-29",
+      "created_at": "2026-10-26",
+      "country": "United Kingdom",
+      "city": "Oxford",
+      "state": "Oxford",
+      "education": "",
+      "experience": "Mid-Senior level",
+      "function": "Science",
+      "industry": "Biotechnology",
+      "locations": [
+        {
+          "country": "United Kingdom",
+          "countryCode": "GB",
+          "city": "Oxford",
+          "region": "Oxford",
+          "hidden": false
+        }
+      ],
+      "description": "<p>Synthetic fixture description: drug discovery and pharmacokinetics.</p>"
+    }
+  ]
+}

@@ -55,7 +55,7 @@ class PublicClient:
             raise AccessRestricted(f"Access restricted: HTTP {response.status_code}")
         return response
 
-    def get_json(self, url: str):
+    def get(self, url: str):
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if origin not in self.robots:
@@ -74,10 +74,16 @@ class PublicClient:
                 rate.seconds / rate.requests if rate else 0,
             )
         if not self.robots[origin].can_fetch(self.user_agent, url):
-            raise AccessRestricted("robots.txt disallows this API path")
+            raise AccessRestricted("robots.txt disallows this path")
         response = self._request(url)
         response.raise_for_status()
-        return response.json()
+        return response
+
+    def get_json(self, url: str):
+        return self.get(url).json()
+
+    def get_text(self, url: str):
+        return self.get(url).text
 
 
 class Adapter:

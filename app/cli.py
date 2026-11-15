@@ -21,6 +21,7 @@ from app.db import connect, migrate
 from app.pipeline.discover import discover
 from app.settings import Settings
 from app.sources.config import load_sources
+from app.sources.firms import register_firms_command, run_firms_command
 from app.store import export_csv, list_jobs, review_job
 
 console = Console(markup=False)
@@ -226,6 +227,8 @@ def _stats(conn, cfg):
 
 
 def _run(args, cfg):
+    if args.command == "firms":
+        return run_firms_command(args, timeout=cfg.http_timeout, user_agent=cfg.user_agent)
     if args.command == "doctor":
         from app.doctor import run
 
@@ -329,6 +332,7 @@ def main(argv=None) -> int:
     _filters(exp)
     exp.set_defaults(limit=None)
     sub.add_parser("stats", help="Show job decisions, source health and LLM usage")
+    register_firms_command(sub)
     args = parser.parse_args(argv)
     if args.command in (None, "help"):
         parser.print_help()
