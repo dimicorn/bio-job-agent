@@ -1,0 +1,37 @@
+# Run ./setup.sh to create config.yaml and save credentials in gitignored .env.
+# Discovery stays deterministic; this LLM layer is for checks and future M2/M3 work.
+analyst:
+  backend: opencode                  # codex | claude_code | api | openai | command | opencode | pi
+  provider: opencode                 # opencode/pi provider ID, e.g. deepseek
+  model: deepseek-v4.1-flash-free     # CLI model ID without provider/ prefix
+  base_url: null                     # openai: URL before /chat/completions
+  api_key_env: null                  # Environment variable name; null for no key
+  openai_extra: {}                   # Optional request fields, e.g. {temperature: 0}
+  command: null                      # command: prompt on stdin, JSON on stdout; absolute script paths
+  codex_model: null                  # null uses the CLI default
+  codex_effort: null                 # Optional Codex reasoning effort
+  timeout: 120                       # Per request/CLI timeout in seconds, maximum 900
+  max_tokens: 2048                   # API output token budget
+  fallback_backend: null             # Only used for rate/quota limits, not arbitrary errors
+  fallback_settings: {}              # Overrides for fallback; may use the same backend with another endpoint
+  input_cost_per_million: null       # Optional current provider rates; null = unknown cost
+  output_cost_per_million: null
+
+# Direct DeepSeek preset (use instead of the analyst block above):
+# analyst:
+#   backend: openai
+#   base_url: https://api.deepseek.com/v1
+#   model: deepseek-flash
+#   api_key_env: DEEPSEEK_API_KEY
+#   fallback_backend: opencode
+#   fallback_settings:
+#     provider: opencode
+#     model: deepseek-v4.1-flash-free
+#     api_key_env: null
+#
+# DeepSeek through Pi:
+# analyst:
+#   backend: pi
+#   provider: deepseek
+#   model: deepseek-flash
+#   api_key_env: DEEPSEEK_API_KEY

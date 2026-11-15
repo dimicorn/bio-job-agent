@@ -28,7 +28,6 @@ def offline_network(request, monkeypatch):
         raise AssertionError("Network disabled: use recorded fixtures or explicit --live -m live")
 
     monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setenv("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 
 
 @pytest.fixture

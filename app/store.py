@@ -8,6 +8,7 @@ from app.pipeline.filter import exclusion, geography
 
 def list_jobs(conn, profile, sources):
     current_sources = {s.id: s for s in sources if s.enabled}
+    reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     result = []
     for row in conn.execute("SELECT * FROM jobs ORDER BY discovered_at DESC,id DESC"):
         job = Posting.model_validate_json(row["payload"])
@@ -35,11 +36,25 @@ def list_jobs(conn, profile, sources):
                 "discovered_at": row["discovered_at"],
                 "last_verified_at": row["last_verified_at"],
                 "status": row["status"],
+                "review": reviews.get(row["id"], "new"),
                 "geography": geography(job, profile),
                 "origins": origins,
             }
         )
     return result
+
+
+def review_job(conn, job_id: int, decision: str) -> None:
+    if decision not in ("saved", "rejected", "later"):
+        raise ValueError("Unknown review decision")
+    conn.execute(
+        """INSERT INTO job_reviews(job_id,decision) VALUES (?,?)
+        ON CONFLICT(job_id) DO UPDATE SET decision=excluded.decision,
+        decided_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
+        (job_id, decision),
+    )
+    # Each keypress survives quitting/interruption later in the review session.
+    conn.commit()
 
 
 CSV_FIELDS = [
@@ -53,6 +68,7 @@ CSV_FIELDS = [
     "posted_at",
     "discovered_at",
     "last_verified_at",
+    "review",
     "apply_url",
     "source_url",
     "provenance",

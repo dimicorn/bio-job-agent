@@ -9,6 +9,8 @@ __pycache__/
 *.db-*
 data/
 config/candidate.yaml
+config.yaml
+.llm-limits.json
 .pytest_cache/
 .ruff_cache/
 *.egg-info/

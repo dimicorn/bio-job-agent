@@ -11,4 +11,4 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check app tests
       - run: uv run pytest
-      - run: docker compose config --quiet
+      - run: uv run ruff format --check app tests

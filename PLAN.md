@@ -15,9 +15,9 @@ Build a **local-first, single-user** agent that discovers, deduplicates, scores,
 ## Proposed stack
 - Python 3.12+, FastAPI, Pydantic, SQLAlchemy + SQLite (Postgres optional).
 - HTTPX + selectolax/BeautifulSoup for allowed retrieval; Playwright for authorized browser-assisted applications.
-- Streamlit dashboard for the MVP; local scheduler (APScheduler or equivalent); n8n optional, not required.
+- Terminal CLI with rich for the MVP, like the sibling job agents; local scheduler (APScheduler or equivalent); n8n optional, not required.
 - Provider-agnostic LLM (Claude / OpenAI-compatible / optional local) for matching and document drafts.
-- Docker Compose, `.env.example`, structured logging, pytest.
+- `.env.example`, structured logging, pytest.
 
 ## Architecture
 ```text
@@ -31,7 +31,7 @@ Job sources / ATS feeds / email alerts
                |
  candidate profile -> hard filters -> semantic + LLM scoring
                |
-           Streamlit review
+           CLI review
                |
         draft tailored documents
                |
@@ -77,13 +77,13 @@ Deduplication: exact source IDs and canonical URLs first; normalized company/tit
 - Playwright may fill forms and attach files only where permitted. Stop for unknown screening answers, legal/visa declarations, demographic questions, assessments, sign-in/MFA and CAPTCHAs.
 - **Approval must be explicit and bound to a particular job + application version.** Do not retry uncertain submissions automatically. A click is not proof of submission; require confirmation page, ID or acknowledgment.
 
-## Dashboard
-Tabs:
-- **Jobs:** ranked feed, employer, location, title, posted/discovered date, fit score, application link, filters, CSV export.
-- **Job detail:** description, source provenance, matching evidence, requirements, save/reject/prepare actions.
-- **Applications:** document previews, approval queue, state, confirmations, notes, follow-up dates.
-- **Profile:** verified master CV, specialty, title, commute, salary, visa and work-policy preferences.
-- **Sources:** enabled adapters, last sync, health/errors, add employer/URL.
+## CLI
+Terminal commands with rich output, following the sibling job agents:
+- **help** (also the default): list commands and options.
+- **setup / doctor:** import profile preferences, configure and check the primary/fallback LLM, diagnose missing setup and source health.
+- **sync / list:** fetch public sources and show ranked jobs, employer, location, title, posted/discovered date, application links and filters.
+- **review:** show one job at a time; o opens the apply link, s saves, r rejects for good, l defers, q quits; persist decisions.
+- **export / stats / llm-check:** CSV export, job decisions/source health/usage, and a tiny structured LLM check.
 
 ## Security and compliance
 - Local-first storage, secrets in `.env` or secret manager (never Git), encrypted sensitive data where feasible.
@@ -95,9 +95,9 @@ Tabs:
 ## Milestones and definition of done
 
 ### M1 — Working discovery MVP
-**Build:** repository structure, Docker, README, settings, SQLite schema/migrations, profile import, 2 *verified working* compliant discovery integrations, normalization, deduplication, industry filters, basic Streamlit job list, direct apply links, CSV export.
+**Build:** repository structure, README, settings, SQLite schema/migrations, profile import, 2 *verified working* compliant discovery integrations, normalization, deduplication, industry filters, CLI list/review, direct apply links, CSV export.
 
-**Done when:** clean Docker start works; job listings have source provenance; duplicates merge; academic roles are excluded; source failure is nonfatal; tests pass.
+**Done when:** clean ./setup.sh install works; job listings have source provenance; duplicates merge; academic roles are excluded; source failure is nonfatal; tests pass.
 
 ### M2 — Smart matching
 **Build:** CV-to-profile extraction and review, editable preferences, deterministic filtering, LLM+semantic evaluation, evidence-based scores, caching, user overrides.
@@ -115,7 +115,7 @@ Tabs:
 **Done when:** no unapproved submit is possible, ambiguous outcomes cannot trigger duplicate retries, CAPTCHA/MFA requires human handling, all actions are auditable. Test with mock forms; no live test submission without permission.
 
 ### M5 — Scheduled operation
-**Build:** daily/twice-daily sync, status rechecks, digest via email/Telegram (optional), source health UI, optional n8n hooks.
+**Build:** daily/twice-daily sync, status rechecks, digest via email/Telegram (optional), source health in doctor/stats, optional n8n hooks.
 
 **Done when:** only new/changed jobs generate alerts; expired vacancies are marked conservatively; scheduler survives restarts.
 
@@ -124,12 +124,11 @@ Tabs:
 biotech-job-agent/
   PLAN.md
   README.md
-  docker-compose.yml
   .env.example
   config/{candidate.example.yaml,sources.yaml}
   app/
     api/
-    dashboard/
+    cli.py
     models/
     sources/{base.py,ats/,boards/}
     pipeline/{normalize.py,dedupe.py,filter.py,score.py}
@@ -152,10 +151,10 @@ biotech-job-agent/
 7. Optimize for low operating cost, maintainability, and installability on macOS, Windows/WSL2, and Linux.
 
 ## Initial next actions
-- [ ] Initialize repository, configs, CI/test tooling and Docker Compose.
+- [ ] Initialize repository, configs, CI/test tooling.
 - [ ] Confirm compliant live access to at least two sources (prefer public employer ATS feeds).
 - [ ] Implement source interface and example adapters with fixtures.
 - [ ] Create schema, normalization, canonicalization and deduplication.
 - [ ] Add configurable London-area geography and strict industry-only filtering.
-- [ ] Deliver Streamlit feed and direct apply links.
+- [ ] Deliver CLI list/review and direct apply links.
 - [ ] Run full M1 test suite and document setup.

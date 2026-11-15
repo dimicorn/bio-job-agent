@@ -26,7 +26,7 @@ def migrate(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)")
     conn.commit()
     for path in sorted(MIGRATIONS.glob("[0-9]*.sql")):
-        # Check under the lock so simultaneous first dashboard sessions migrate once.
+        # Check under the lock so simultaneous CLI processes migrate once.
         conn.execute("BEGIN IMMEDIATE")
         try:
             if not conn.execute(

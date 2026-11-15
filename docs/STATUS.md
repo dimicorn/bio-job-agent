@@ -1,6 +1,6 @@
 # M1 implementation and verification status
 
-Checked on **2026-11-15 UTC**, Python **3.12.13** on macOS arm64. M1 implementation is complete with a Docker runtime verification gap described below. M2–M5 are out of scope and have no implementation stubs.
+Updated on **2026-11-15 UTC** on macOS arm64. Discovery now uses a terminal CLI with rich; provider setup, structured LLM checks and persistent manual review decisions are implemented. Scientific matching/scoring, CV extraction, document drafts and M4–M5 remain deferred. Historical public-source checks below used Python 3.12.13; current offline validation uses Python 3.14.7.
 
 ## Working: verified public feeds
 
@@ -32,18 +32,24 @@ Fallback for either source: retain cached listings and source error/last-seen in
 ## Partial / restricted / deferred
 
 - **Recursion / Greenhouse:** a direct live GET of `https://boards-api.greenhouse.io/v1/boards/recursionpharmaceuticals/jobs?content=true` returned HTTP 200 and 18 postings, with **zero London location fields** in that response. This differs from search-index snapshots of the [board](https://job-boards.greenhouse.io/recursionpharmaceuticals), so the direct response is the evidence used here. It is included disabled in the watchlist, rather than counted as a London-producing integration. The same verified Greenhouse adapter can read it when enabled. It has no dedicated recorded fixture.
-- **Docker runtime:** the installed Docker 29.5.3 client cannot connect to `/Users/dmitr/.docker/run/docker.sock` (socket missing). `docker compose config --quiet` succeeds. Build and clean Compose startup remain **unverified**; no Docker daemon was started or shared infrastructure changed. Native startup is the exercised fallback.
 - **Restricted integrations:** none of the two enabled public APIs was restricted in the live checks. The app stops rather than evades any future restriction.
 - **Deferred sources:** GSK, Lonza, Autolus and AstraZeneca are watchlist intentions in PLAN.md, not working adapters in this release. Workday, Ashby, SmartRecruiters, industry boards, email alerts and URL import were not implemented or represented as verified.
-- **Deferred capabilities:** scoring/LLMs, CV extraction, document generation, application workflows/approval/submission, Playwright, scheduling, notifications and vacancy expiry/rechecks. SQLite implements M1 entities only. FastAPI is not needed for this local dashboard MVP.
+- **Deferred capabilities:** scientific matching/scoring, CV extraction, document generation, application workflows/approval/submission, Playwright, scheduling, notifications and vacancy expiry/rechecks. SQLite implements M1 entities only. FastAPI is not needed for this local terminal MVP.
 
 ## Validation actually performed
 
-- `uv sync --python 3.12` installed the project and generated the committed cross-platform `uv.lock`.
-- `uv run pytest`: **55 offline tests pass** (1 live test deselected) with sockets blocked; recorded API operational fields/shape, synthetic description content and fixtures for robots. Includes empty and populated Streamlit `AppTest` rendering, source provenance/links and search filtering.
-- `uv run pytest --live -m live -s`: **1 live test passed**, both configured APIs returned real London-area jobs and the complete pipeline persisted 11 matching jobs (1 Mytos + 10 Isomorphic).
-- `uv run ruff check app tests` and `uv run ruff format --check app tests` pass.
-- `docker compose config --quiet` passes; container startup was not run because the daemon is unavailable.
-- Native `bio-jobs init`, `import-profile`, fixture-backed persistence and CSV export, followed by `streamlit run` HTTP health/root checks, pass. No source network access occurs during native dashboard startup.
+- Locked native dependencies install with `uv sync --frozen`; the project now depends on rich and has no web UI dependency.
+- `uv run pytest`: **97 offline tests pass** (1 live test deselected). The offline suite blocks sockets and mocks LLM HTTP/subprocess calls. It covers all seven backends, schema format negotiation, strict Pydantic validation, rate/quota errors, fallback settings and cooldown persistence across launches. Terminal tests cover help, list/filter/export, source health/stats, first-run setup, hidden-key storage, re-runnable setup, and persisted save/reject/later decisions surviving source refreshes.
+- A native `./setup.sh` install and re-run passed with an actual local JSON stub through the command backend (no external LLM request); `doctor`, fixture-backed `list`/`export`, `stats` and `llm-check` exited 0.
+- The shell installer is tested from another working directory with a fake uv executable; it runs locked dependency sync, database init and setup in order on repeated runs. It only installs missing uv after explicit terminal consent. No scheduler is installed.
+- `uv run ruff check app tests` and `uv run ruff format --check app tests` are required and run locally before delivery.
+- The previous discovery live check (`uv run pytest --live -m live -s`) passed both configured ATS APIs and persisted 11 matching jobs (1 Mytos + 10 Isomorphic); it was not repeated for the LLM change. Discovery integration fixtures still pass offline.
 
-Proof logs and the native smoke database are task-local outside the repository; no populated `.env`, candidate-private YAML, live database, secrets or proof logs are committed.
+## LLM live verification limits
+
+- **OpenCode v2.3.0:** help/model/output flags verified against the installed CLI. The free `opencode/deepseek-v4.1-flash-free` smoke reached the provider and returned HTTP **429**, `provider.free-limit`: “Free usage limit reached.” No schema-validated live model answer was obtained. Its `retryAfterMs` metadata is handled and regression-tested offline. The initial custom-agent bootstrap failed before any model request; inline inherited config fixed it. No further live model requests were made.
+- **Pi 1.5.0:** flags verified against installed `--help`; response/usage parsing, disabled tools and DeepSeek provider/model selection tested only with mocked subprocesses.
+- **Direct DeepSeek / openai:** no `DEEPSEEK_API_KEY` is configured here. Live use remains **unverified**; no key was requested or fabricated.
+- **codex, claude_code, api, command:** backend unit tests are offline and mocked. No live model request was sent through these backends.
+
+Proof and scratch output live outside the repository under the authorised task directory or temporary directories. No populated `.env`, private profile, database, keys or proof logs are committed.
