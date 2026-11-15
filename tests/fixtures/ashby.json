@@ -1,0 +1,65 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "f9de4f71-c0f8-4de4-8f88-0ee8072d1e7a",
+      "title": "Senior Member of Research Staff (London)",
+      "department": "Research",
+      "team": "Research",
+      "employmentType": "FullTime",
+      "location": "London",
+      "shouldDisplayCompensationOnJobPostings": false,
+      "secondaryLocations": [],
+      "publishedAt": "2026-04-17T00:52:06.526+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Hybrid",
+      "address": {
+        "postalAddress": {
+          "addressRegion": "England",
+          "addressCountry": "United Kingdom",
+          "addressLocality": "London"
+        }
+      },
+      "jobUrl": "https://jobs.ashbyhq.com/voleon/f9de4f71-c0f8-4de4-8f88-0ee8072d1e7a",
+      "applyUrl": "https://jobs.ashbyhq.com/voleon/f9de4f71-c0f8-4de4-8f88-0ee8072d1e7a/application",
+      "descriptionPlain": "Synthetic fixture description: molecular biology, cell culture and drug discovery.",
+      "compensation": {
+        "compensationTierSummary": null,
+        "scrapeableCompensationSalarySummary": null,
+        "compensationTiers": [],
+        "summaryComponents": []
+      }
+    },
+    {
+      "id": "5c966855-af8b-4bf5-9f58-6701e1cc2238",
+      "title": "Data Scientist (London)",
+      "department": "Research",
+      "team": "Research",
+      "employmentType": "FullTime",
+      "location": "London",
+      "shouldDisplayCompensationOnJobPostings": true,
+      "secondaryLocations": [],
+      "publishedAt": "2026-04-14T17:53:59.200+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "workplaceType": "Hybrid",
+      "address": {
+        "postalAddress": {
+          "addressRegion": "England",
+          "addressCountry": "United Kingdom",
+          "addressLocality": "London"
+        }
+      },
+      "jobUrl": "https://jobs.ashbyhq.com/voleon/5c966855-af8b-4bf5-9f58-6701e1cc2238",
+      "applyUrl": "https://jobs.ashbyhq.com/voleon/5c966855-af8b-4bf5-9f58-6701e1cc2238/application",
+      "descriptionPlain": "Synthetic fixture description: molecular biology, cell culture and drug discovery.",
+      "compensation": {
+        "compensationTierSummary": null,
+        "scrapeableCompensationSalarySummary": null,
+        "compensationTiers": [],
+        "summaryComponents": []
+      }
+    }
+  ]
+}

@@ -8,6 +8,7 @@ from app.db import connect, migrate
 from app.pipeline.discover import discover
 from app.settings import Settings
 from app.sources.config import load_sources
+from app.sources.firms import register_firms_command, run_firms_command
 from app.store import export_csv, list_jobs
 
 
@@ -22,9 +23,14 @@ def main():
     sub.add_parser("sync", help="Explicit live refresh; respects robots and persistent cooldowns")
     exp = sub.add_parser("export", help="Export jobs matching current preferences")
     exp.add_argument("path", type=Path)
+    register_firms_command(sub)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     settings = Settings()
+    if args.command == "firms":
+        raise SystemExit(
+            run_firms_command(args, timeout=settings.http_timeout, user_agent=settings.user_agent)
+        )
     with connect(settings.resolved(settings.database_path)) as conn:
         migrate(conn)
         if args.command == "init":

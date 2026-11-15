@@ -1,4 +1,5 @@
 # Only reviewed commercial employers. Never add universities or general aggregators.
+watchlist: ../firms.yaml
 sources:
   - id: mytos-lever
     adapter: lever
