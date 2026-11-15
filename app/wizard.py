@@ -148,6 +148,11 @@ def setup(cfg: Settings) -> bool:
         configured = cfg.with_config()
     else:
         primary = _choose(cfg)
+        previous = document.get("analyst") or {}
+        for key in ("preferences", "batch_size", "parallel", "min_score", "weights"):
+            if key in previous:
+                validated = Analyst.model_validate({key: previous[key]})
+                setattr(primary, key, getattr(validated, key))
         index = _pick("Fallback when the primary reaches its limit:", ["None", *OPTIONS])
         if index:
             fallback = _choose(cfg, index - 1)
@@ -174,7 +179,15 @@ def setup(cfg: Settings) -> bool:
     console.print(
         f"Imported profile version {version} from {candidate}; reviewed={profile.reviewed}."
     )
-    console.print("Review the candidate YAML and set reviewed: true only when accurate.")
+    resume = configured.resolved(configured.resume_path)
+    example = ROOT / "resume.example.md"
+    if not resume.exists() and example.exists():
+        resume.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(example, resume)
+    console.print(
+        "Fill resume.md, run bio-jobs extract-profile --force, then review "
+        "every extracted fact and set reviewed: true only when accurate."
+    )
     checks = [("Primary", configured)]
     if configured.analyst.fallback_backend:
         checks.append(("Fallback", fallback_cfg(configured)))
@@ -189,5 +202,8 @@ def setup(cfg: Settings) -> bool:
             console.print(
                 f"{label}: check failed. Run bio-jobs doctor; correct config/credentials and rerun setup."
             )
-    console.print("Next: uv run bio-jobs doctor; uv run bio-jobs sync; uv run bio-jobs list")
+    console.print(
+        "Next: uv run bio-jobs doctor; uv run bio-jobs extract-profile --force; "
+        "review candidate YAML; uv run bio-jobs scan; uv run bio-jobs list"
+    )
     return passed

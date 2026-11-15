@@ -10,6 +10,7 @@ __pycache__/
 data/
 config/candidate.yaml
 config.yaml
+resume.md
 .llm-limits.json
 .pytest_cache/
 .ruff_cache/

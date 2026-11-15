@@ -57,12 +57,28 @@ def review_job(conn, job_id: int, decision: str) -> None:
     conn.commit()
 
 
+def override_score(conn, job_id: int, score: int, recommendation: str, reason: str) -> None:
+    if type(score) is not int or not 0 <= score <= 100:
+        raise ValueError("Override score must be an integer from 0 to 100")
+    if recommendation not in ("apply", "maybe", "skip") or not reason.strip():
+        raise ValueError("Override needs apply/maybe/skip and a reason")
+    conn.execute(
+        """INSERT INTO score_overrides(job_id,score,recommendation,reason) VALUES (?,?,?,?)
+        ON CONFLICT(job_id) DO UPDATE SET score=excluded.score,
+        recommendation=excluded.recommendation,reason=excluded.reason,
+        updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
+        (job_id, score, recommendation, reason.strip()),
+    )
+    conn.commit()
+
+
 CSV_FIELDS = [
     "id",
     "title",
     "employer",
     "location",
     "geography",
+    "score",
     "remote_policy",
     "employment_type",
     "posted_at",

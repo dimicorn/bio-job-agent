@@ -12,7 +12,7 @@ Run `./setup.sh` once, or `uv run bio-jobs setup` to change settings. The wizard
 | `pi` | Installed Pi, `provider`, `model`; credentials through its auth or `.env` |
 | `command` | `command`: prompt on stdin, one JSON object on stdout; no shell expansion |
 
-Discovery and review do not call the LLM. Matching/scoring, CV extraction and document drafts remain future work. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` summarises usage and known costs.
+Discovery and terminal review do not call the LLM. `extract-profile` extracts resume facts for mandatory factual review; `analyze` scores stored eligible jobs and `scan` syncs then scores. These commands send candidate data to the configured backend. Document drafts remain deferred. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` groups usage and known costs by backend, model and purpose, including scoring.
 
 ## DeepSeek: direct API
 
@@ -26,7 +26,7 @@ analyst:
 
 The [official DeepSeek API guide](https://api-docs.deepseek.com/) documents OpenAI-compatible requests and the current `deepseek-flash` model alias. Enter your key in the wizard or add `DEEPSEEK_API_KEY=...` to `.env`; never put a key in YAML. This machine has no DeepSeek key, so **direct DeepSeek live use is unverified**. Its transport and schema negotiation are tested offline.
 
-Other OpenAI-compatible services use the same fields. For a keyless local endpoint, use e.g. `base_url: http://localhost:11434/v1`, the installed model ID and `api_key_env: null`. Optional request fields such as temperature go in `openai_extra`; the adapter owns model/messages/response format. API output budgets use `max_tokens` (default 2048), and each request has a configurable `timeout` (default 120 seconds).
+Other OpenAI-compatible services use the same fields. For a keyless local endpoint, use e.g. `base_url: http://localhost:11434/v1`, the installed model ID and `api_key_env: null`. Optional request fields such as temperature go in `openai_extra`; the adapter owns model/messages/response format. API output budgets use `max_tokens` (default 12000 for detailed scoring batches), and each request has a configurable `timeout` (default 120 seconds). Reduce `batch_size` or raise the budget if a provider truncates scoring responses.
 
 ## DeepSeek through OpenCode
 

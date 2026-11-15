@@ -1,6 +1,18 @@
 # Run ./setup.sh to create config.yaml and save credentials in gitignored .env.
-# Discovery stays deterministic; this LLM layer is for checks and future M2/M3 work.
+resume: resume.md                    # Relative to this config file; local and gitignored
 analyst:
+  preferences: ""                   # Desired roles, locations, salary and working arrangements
+  batch_size: 5
+  parallel: 2
+  min_score: 50                      # list/review/export gate; --all-scores bypasses it
+  weights:                          # Must sum to 100
+    specialization: 30
+    technical: 20
+    seniority_leadership: 15
+    industry_therapeutic: 10
+    geography: 10
+    research_outcomes: 10
+    salary_arrangements: 5
   backend: opencode                  # codex | claude_code | api | openai | command | opencode | pi
   provider: opencode                 # opencode/pi provider ID, e.g. deepseek
   model: deepseek-v4.1-flash-free     # CLI model ID without provider/ prefix
@@ -11,7 +23,7 @@ analyst:
   codex_model: null                  # null uses the CLI default
   codex_effort: null                 # Optional Codex reasoning effort
   timeout: 120                       # Per request/CLI timeout in seconds, maximum 900
-  max_tokens: 2048                   # API output token budget
+  max_tokens: 12000                  # API output token budget for detailed batches
   fallback_backend: null             # Only used for rate/quota limits, not arbitrary errors
   fallback_settings: {}              # Overrides for fallback; may use the same backend with another endpoint
   input_cost_per_million: null       # Optional current provider rates; null = unknown cost

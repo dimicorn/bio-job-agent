@@ -1,6 +1,6 @@
 # M1 implementation and verification status
 
-Updated on **2026-11-15 UTC** on macOS arm64. Discovery now uses a terminal CLI with rich; provider setup, structured LLM checks and persistent manual review decisions are implemented. Scientific matching/scoring, CV extraction, document drafts and M4–M5 remain deferred. Historical public-source checks below used Python 3.12.13; current offline validation passes on Python 3.12.13 and 3.14.7.
+Updated on **2026-11-15 UTC** on macOS arm64. Discovery uses a terminal CLI with rich; provider setup, structured LLM calls, resume extraction with mandatory factual review, versioned batched scoring and persistent manual decisions/score overrides are implemented. Documents and M4–M5 remain deferred. Historical public-source checks below used Python 3.12.13; prior offline validation passed on Python 3.12.13 and 3.14.7.
 
 ## Working: verified public feeds
 
@@ -31,10 +31,12 @@ Fallback for either source: retain cached listings and source error/last-seen in
 
 ## Partial / restricted / deferred
 
+- **M2 matching validation:** 150 offline tests pass on Python 3.14.7, including command-backend scoring, mandatory profile review, schema rejection, unknown requirements, content-hash cache invalidation and persisted overrides. Ruff lint/format checks pass. One opt-in synthetic scoring request passed through the **Codex** backend (73/100, schema validated, uncertainty flags present); no personal resume or real job application was used. Existing discovery live checks were not repeated for M2.
+
 - **Recursion / Greenhouse:** a direct live GET of `https://boards-api.greenhouse.io/v1/boards/recursionpharmaceuticals/jobs?content=true` returned HTTP 200 and 18 postings, with **zero London location fields** in that response. This differs from search-index snapshots of the [board](https://job-boards.greenhouse.io/recursionpharmaceuticals), so the direct response is the evidence used here. It is included disabled in the watchlist, rather than counted as a London-producing integration. The same verified Greenhouse adapter can read it when enabled. It has no dedicated recorded fixture.
 - **Restricted integrations:** none of the two enabled public APIs was restricted in the live checks. The app stops rather than evades any future restriction.
 - **Expanded sources merged from main:** `firms.yaml` records 14 reviewed employers and their public evidence URLs. Greenhouse/Lever feeds, Workable feeds (OMass Therapeutics and biomodal), and public page watchers (GSK, AstraZeneca, Lonza, LabGenius, RxCelerate) are supported. Generic page snapshots are stored for manual review, not advertised as scientist jobs. The Ashby adapter is fixture-tested, but its candidate boards are excluded because the robots endpoint returned 401. Autolus Workday returned 403 and is excluded. No undocumented Workday API, JavaScript execution or access bypass is implemented. Run `bio-jobs firms` offline or opt in to `firms --validate` to reverify. The source expansion was verified in its own main-branch delivery; this branch reruns its offline coverage after merging.
-- **Deferred capabilities:** scientific matching/scoring, CV extraction, document generation, application workflows/approval/submission, Playwright, scheduling, notifications and vacancy expiry/rechecks. SQLite implements M1 entities only. FastAPI is not needed for this local terminal MVP.
+- **Deferred capabilities:** document generation, application workflows/approval/submission, Playwright, scheduling, notifications and vacancy expiry/rechecks. SQLite includes M1 discovery and M2 profile extraction, evaluations and overrides. FastAPI is not needed for this local terminal tool.
 
 ## Validation actually performed
 

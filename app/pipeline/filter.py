@@ -134,11 +134,35 @@ def exclusion(job: Posting, source: SourceConfig, profile: CandidateProfile) -> 
     ):
         return "excluded_role"
     # Match title tokens in any order (e.g. Principal PD/MSAT Scientist).
-    if not any(
+    target_match = any(
         all(contains(title, token) for token in key(t).split())
         for t in profile.target_titles
         if key(t)
-    ):
+    )
+    known_level = any(
+        contains(title, x)
+        for x in (
+            "junior",
+            "associate",
+            "senior",
+            "principal",
+            "staff",
+            "lead",
+            "leader",
+            "head",
+            "director",
+            "vp",
+            "chief",
+            "intern",
+            "graduate",
+            "technician",
+        )
+    )
+    # Generic titles (e.g. Scientist) do not prove a seniority mismatch.
+    scientific_role = any(
+        contains(title, x) for x in ("scientist", "scientific", "research investigator")
+    )
+    if profile.target_titles and not target_match and (known_level or not scientific_role):
         return "seniority_or_role"
     geo = geography(job, profile)
     if geo == "outside" or (geo == "unknown" and not profile.include_unknown_location):

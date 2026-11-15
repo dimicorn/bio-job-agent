@@ -20,6 +20,7 @@ def configured(tmp_path, monkeypatch):
         _env_file=None,
         database_path=tmp_path / "jobs.sqlite3",
         candidate_path=tmp_path / "candidate.yaml",
+        resume_path=tmp_path / "resume.md",
         config_path=tmp_path / "config.yaml",
         env_path=tmp_path / ".env",
         llm_state_dir=tmp_path,
@@ -48,7 +49,7 @@ def test_list_filters_export_stats(configured, profile, sources, transport):
 
     with connect(cfg.database_path) as conn:
         discover(conn, profile, sources, transport=transport, pause=lambda _: None)
-    assert cli.main(["list"]) == 0
+    assert cli.main(["list", "--all-scores"]) == 0
     assert "Principal Scientist" in output.getvalue()
     assert "https://" in output.getvalue()
     assert "Posted / discovered" in output.getvalue()
@@ -57,7 +58,7 @@ def test_list_filters_export_stats(configured, profile, sources, transport):
     assert cli.main(["list", "--title", "no such role"]) == 0
     assert "0 matching roles" in output.getvalue()
     path = cfg.llm_state_dir / "jobs.csv"
-    assert cli.main(["export", str(path), "--employer", "Mytos"]) == 0
+    assert cli.main(["export", str(path), "--employer", "Mytos", "--all-scores"]) == 0
     assert "Principal Scientist" in path.read_text(encoding="utf-8-sig")
     assert cli.main(["stats"]) == 0
     assert "Source health" in output.getvalue() and "LLM usage" in output.getvalue()
@@ -77,7 +78,7 @@ def test_review_actions_persist_and_rejection_survives_refresh(
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
     keys = iter("ors")
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
-    assert cli.main(["review"]) == 0
+    assert cli.main(["review", "--all-scores"]) == 0
     assert len(opened) == 1
     with connect(cfg.database_path) as conn:
         rows = list_jobs(conn, profile, sources)
@@ -94,7 +95,7 @@ def test_review_actions_persist_and_rejection_survives_refresh(
     assert "No jobs to review" in output.getvalue()
     keys = iter("lq")
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
-    assert cli.main(["review", "--status", "saved"]) == 0
+    assert cli.main(["review", "--status", "saved", "--all-scores"]) == 0
     with connect(cfg.database_path) as conn:
         assert any(r["review"] == "later" for r in list_jobs(conn, profile, sources))
     monkeypatch.setattr(cli, "read_key", lambda: "q")

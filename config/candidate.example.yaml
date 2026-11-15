@@ -1,7 +1,11 @@
 # Example preferences, not candidate qualifications. Copy to candidate.yaml (gitignored).
 name: Example candidate
 reviewed: false
-specialties: []  # No scientific specialty is assumed or scored in M1.
+resume_hash: null  # Filled by extract-profile; resume edits require extraction and review again
+extraction_version: null
+facts: []         # Extracted claims with verbatim resume evidence; review and correct each one
+uncertainties: []
+specialties: []
 target_titles:
   - Principal Scientist
   - Senior Principal Scientist

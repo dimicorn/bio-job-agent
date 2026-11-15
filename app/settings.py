@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,10 +12,32 @@ ROOT = Path(__file__).resolve().parents[1]
 Backend = Literal["codex", "claude_code", "api", "openai", "command", "opencode", "pi"]
 
 
+class Weights(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    specialization: int = Field(default=30, ge=0, le=100)
+    technical: int = Field(default=20, ge=0, le=100)
+    seniority_leadership: int = Field(default=15, ge=0, le=100)
+    industry_therapeutic: int = Field(default=10, ge=0, le=100)
+    geography: int = Field(default=10, ge=0, le=100)
+    research_outcomes: int = Field(default=10, ge=0, le=100)
+    salary_arrangements: int = Field(default=5, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def total(self):
+        if sum(self.model_dump().values()) != 100:
+            raise ValueError("analyst.weights must sum to 100")
+        return self
+
+
 class Analyst(BaseModel):
     """Provider settings; keys belong in .env, never in this model."""
 
     model_config = ConfigDict(extra="forbid")
+    preferences: str = ""
+    batch_size: int = Field(default=5, ge=1, le=50)
+    parallel: int = Field(default=2, ge=1, le=16)
+    min_score: int = Field(default=50, ge=0, le=100)
+    weights: Weights = Field(default_factory=Weights)
     backend: Backend = "codex"
     model: str | None = None
     provider: str | None = None
@@ -28,7 +50,7 @@ class Analyst(BaseModel):
     fallback_backend: Backend | None = None
     fallback_settings: dict[str, Any] = Field(default_factory=dict)
     timeout: float = Field(default=120, gt=0, le=900)
-    max_tokens: int = Field(default=2048, gt=0)
+    max_tokens: int = Field(default=12000, gt=0)
     input_cost_per_million: float | None = Field(default=None, ge=0)
     output_cost_per_million: float | None = Field(default=None, ge=0)
 
@@ -37,6 +59,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIO_", env_file=ROOT / ".env", extra="ignore")
     database_path: Path = ROOT / "data/jobs.sqlite3"
     candidate_path: Path = ROOT / "config/candidate.example.yaml"
+    resume_path: Path = ROOT / "resume.md"
     sources_path: Path = ROOT / "config/sources.yaml"
     http_timeout: float = 20
     user_agent: str = "BioJobAgent/0.1 (local single-user job discovery)"
@@ -58,7 +81,10 @@ class Settings(BaseSettings):
         analyst = Analyst.model_validate(data.get("analyst", {}))
         # Validate fallback overrides now, rather than waiting for a primary limit.
         Analyst.model_validate({**analyst.model_dump(), **analyst.fallback_settings})
-        return self.model_copy(update={"analyst": analyst})
+        resume_path = Path(data.get("resume", self.resume_path))
+        if not resume_path.is_absolute():
+            resume_path = path.parent / resume_path
+        return self.model_copy(update={"analyst": analyst, "resume_path": resume_path})
 
     def secret(self, name: str | None) -> str:
         if not name:

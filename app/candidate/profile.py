@@ -3,7 +3,14 @@ import json
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Fact(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    category: str = Field(min_length=1)
+    fact: str = Field(min_length=1)
+    evidence: str = Field(min_length=1, description="Verbatim supporting excerpt from resume")
 
 
 class Regions(BaseModel):
@@ -20,6 +27,10 @@ class CandidateProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     reviewed: bool = False
+    resume_hash: str | None = None
+    extraction_version: str | None = None
+    facts: list[Fact] = []
+    uncertainties: list[str] = []
     specialties: list[str] = []
     target_titles: list[str]
     regions: Regions = Regions()
