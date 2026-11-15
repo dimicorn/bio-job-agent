@@ -133,6 +133,7 @@ def test_llm_check_does_not_need_database(configured, monkeypatch):
 
 def test_doctor_is_offline_and_readonly(configured, monkeypatch):
     cfg, output = configured
+    monkeypatch.setattr("app.materials.browser_available", lambda: True)
     monkeypatch.setattr(doctor, "check", lambda *a, **k: pytest.fail("Unexpected live call"))
     assert cli.main(["doctor"]) == 1
     assert not cfg.database_path.exists()
@@ -148,7 +149,7 @@ def test_setup_reuses_profile_config_and_secret(configured, monkeypatch):
     cfg.config_path.unlink()
     monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
     # command primary; no fallback; a tiny check is mocked.
-    answers = iter(["9", "/bin/echo", "1"])
+    answers = iter(["9", "/bin/echo", "1", "1", "", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     checks = []
     monkeypatch.setattr(
@@ -162,7 +163,7 @@ def test_setup_reuses_profile_config_and_secret(configured, monkeypatch):
     monkeypatch.delenv("BIO_TEST_KEY", raising=False)
     assert cfg.secret("BIO_TEST_KEY") == "secret-$-value"
     assert cfg.env_path.stat().st_mode & 0o777 == 0o600
-    answers = iter(["n"])
+    answers = iter(["n", "n"])
     assert wizard.setup(cfg)
     assert cfg.config_path.read_text() == original
     assert cfg.candidate_path.read_text() == profile
@@ -179,7 +180,7 @@ def test_wizard_saves_api_keys_and_fallback(configured, monkeypatch):
     monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(wizard.getpass, "getpass", lambda _: "fake-key-for-offline-test")
-    answers = iter(["1", "", "6", "deepseek", "my-pi-model"])
+    answers = iter(["1", "", "6", "deepseek", "my-pi-model", "2", "7", "3", "85", "0,24"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     checks = []
     monkeypatch.setattr(
@@ -191,6 +192,9 @@ def test_wizard_saves_api_keys_and_fallback(configured, monkeypatch):
     assert checks == [("openai", "deepseek-flash"), ("pi", "my-pi-model")]
     document = yaml.safe_load(cfg.config_path.read_text())
     assert document["analyst"]["fallback_backend"] == "pi"
+    assert document["apply"]["mode"] == "assisted"
+    assert document["apply"]["daily_limit"] == 7
+    assert document["apply"]["active_hours"] == [0, 24]
     assert "fake-key" not in cfg.config_path.read_text()
     assert cfg.secret("DEEPSEEK_API_KEY") == "fake-key-for-offline-test"
 
@@ -213,6 +217,7 @@ def test_setup_script_is_location_independent_and_rerunnable(tmp_path):
         calls
         == [
             ["sync", "--project", str(ROOT), "--frozen"],
+            ["run", "--project", str(ROOT), "playwright", "install", "chromium"],
             ["run", "--project", str(ROOT), "bio-jobs", "init"],
             ["run", "--project", str(ROOT), "bio-jobs", "setup"],
         ]
@@ -233,6 +238,7 @@ def test_setup_copies_example_once_and_keeps_edited_profile(configured, monkeypa
     cfg.candidate_path = example
     monkeypatch.setattr(wizard, "ROOT", root)
     monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
+    cfg.config_path.write_text(cfg.config_path.read_text() + "\napply:\n  mode: manual\n")
     monkeypatch.setattr("builtins.input", lambda _: "n")
     monkeypatch.setattr(wizard, "check", lambda *a, **kw: None)
     assert wizard.setup(cfg)

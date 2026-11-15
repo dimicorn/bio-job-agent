@@ -47,6 +47,18 @@ def run(cfg: Settings, *, online=False) -> int:
         report("Sources", bool(enabled), f"{len(enabled)} enabled; edit config/sources.yaml")
     except (ValueError, OSError, yaml.YAMLError):
         report("Sources", False, "Fix BIO_SOURCES_PATH / config/sources.yaml")
+    from app.materials import browser_available
+
+    report("Chromium", browser_available(), "PDF rendering: uv run playwright install chromium")
+    if configured:
+        a = configured.apply
+        report(
+            "Apply mode",
+            True,
+            f"{a.mode}; manual handoff in M3; browser filling arrives in M4; "
+            f"daily_limit={a.daily_limit}, max_per_run={a.max_per_run}, min_score={a.min_score}, "
+            f"active_hours={a.active_hours} (local time)",
+        )
     path = cfg.resolved(cfg.database_path)
     if path.exists():
         try:

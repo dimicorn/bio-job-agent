@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from app import answers, applications, materials
 from app.candidate.profile import import_profile, load_profile
 from app.db import connect, migrate
 from app.pipeline.discover import discover
@@ -59,6 +60,7 @@ def _filters(parser, *, review=False):
         default=None,
         help="Review decision (default excludes rejected)",
     )
+    parser.add_argument("--application-state", choices=materials.STATES)
     parser.add_argument("--limit", type=_positive, default=50)
     parser.add_argument(
         "--all-scores",
@@ -70,6 +72,11 @@ def _filters(parser, *, review=False):
 def _select(rows, args, *, review=False, min_score=0):
     result = []
     for row in rows:
+        if (
+            getattr(args, "application_state", None)
+            and row.get("application_state") != args.application_state
+        ):
+            continue
         if (
             not args.all_scores
             and min_score > 0
@@ -103,7 +110,7 @@ def _list(rows):
         "Employer",
         "Location",
         "Posted / discovered",
-        "Review",
+        "Review / application",
         "Score / evidence / gaps",
         "Apply link",
         title="Jobs — highest fit score first",
@@ -119,7 +126,7 @@ def _list(rows):
             _text(row["employer"]),
             _text(row["location"] or "unknown"),
             _text(f"{(row['posted_at'] or 'unknown')[:10]} / {row['discovered_at'][:10]}"),
-            row["review"],
+            row["review"] + " / " + (row.get("application_state") or "unprepared"),
             _text(_score_summary(row)),
             Text("Open", style=f"link {row['apply_url']}"),
         )
@@ -160,13 +167,14 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
-def _review(conn, rows):
+def _review(conn, rows, cfg=None, profile=None):
     if not sys.stdin.isatty():
         raise ValueError("Review needs an interactive terminal: uv run bio-jobs review")
     if not rows:
         console.print(
             "No jobs to review. Run bio-jobs scan or use --all-scores to adjust the score gate."
         )
+    approved_this_run = 0
     for index, row in enumerate(rows, 1):
         console.rule(f"{index}/{len(rows)}")
         console.print(_text(f"{row['title']} — {row['employer']}"))
@@ -199,11 +207,65 @@ def _review(conn, rows):
                     )
                 )
         console.print(_text(row["apply_url"]))
-        console.print("o open | s save | r reject | l later | v override score/decision | q quit")
+        _show_materials(conn, row)
+        console.print(
+            "o open | s save | r reject | l later | v override | e edit letter | "
+            "w rewrite | d diff | a approve/open | t mark submitted | m state | q quit"
+        )
         while True:
             action = read_key()
             if action in ("q", ""):
                 return
+            if action in ("e", "w", "d", "a", "t", "m"):
+                try:
+                    if action == "d":
+                        console.print(_text(materials.material_diff(conn, row["id"])))
+                    elif cfg is None or profile is None:
+                        raise ValueError("Preparation requires configured profile")
+                    elif action == "e":
+                        materials.edit_letter(cfg, conn, profile, row)
+                        _show_materials(conn, row)
+                    elif action == "w":
+                        instruction = input("Rewrite instruction: ").strip()
+                        if instruction:
+                            materials.write_letters(
+                                cfg, conn, profile, [row], force=True, instruction=instruction
+                            )
+                            _show_materials(conn, row)
+                    elif action == "a":
+                        paths = applications.approve(
+                            cfg, conn, profile, row, approved_this_run=approved_this_run
+                        )
+                        approved_this_run += 1
+                        console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
+                        if cfg.apply.mode != "manual":
+                            console.print("Browser filling arrives in M4; using manual handoff.")
+                        for path in paths:
+                            console.print(_text(path))
+                        if not webbrowser.open(row["apply_url"]):
+                            console.print("Could not open browser; use the apply link above.")
+                        console.print(
+                            "Complete the application yourself, then t to record submission."
+                        )
+                    elif action == "t":
+                        applications.confirm_submitted(
+                            conn,
+                            row,
+                            input("Type submitted to confirm you completed the application: "),
+                        )
+                        console.print("Recorded submitted (user confirmed).")
+                    elif action == "m":
+                        value = input(
+                            "State (saved/preparing/awaiting_review/blocked/manual_required/withdrawn): "
+                        ).strip()
+                        if value not in set(materials.STATES) - {"approved", "submitted"}:
+                            raise ValueError("Use a to approve or t to confirm submission")
+                        materials.state(conn, row["id"], value)
+                        row["application_state"] = value
+                        console.print(f"State: {value}")
+                except (ValueError, RuntimeError, OSError) as exc:
+                    console.print(_text(str(exc)))
+                continue
             if action == "o":
                 if not webbrowser.open(row["apply_url"]):
                     console.print("Could not open a browser. Use the apply link above.")
@@ -225,7 +287,35 @@ def _review(conn, rows):
                 break
 
 
+def _show_materials(conn, row):
+    current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
+    console.print(f"Application: {current[0] if current else 'unprepared'}")
+    for kind in ("letter", "resume", "answers"):
+        item = materials.latest(conn, row["id"], kind)
+        if not item:
+            continue
+        console.print(
+            _text(f"{kind} v{item['id']} / profile {item['profile_version']}: {item['path']}")
+        )
+        if kind == "letter":
+            console.print(_text(item["content"]))
+            console.print(_text("Fact provenance: " + item["provenance"]))
+        if item["pdf_path"]:
+            console.print(_text(item["pdf_path"]))
+        for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):
+            console.print(_text("WARNING: " + warning))
+
+
 def _stats(conn, cfg):
+    console.print(
+        f"Apply mode: {cfg.apply.mode}; manual handoff in M3; browser filling arrives in M4. "
+        f"daily_limit={cfg.apply.daily_limit}, max_per_run={cfg.apply.max_per_run}, "
+        f"min_score={cfg.apply.min_score}, active_hours={cfg.apply.active_hours} (local time)"
+    )
+    for value, count in conn.execute(
+        "SELECT state,count(*) FROM applications GROUP BY state ORDER BY state"
+    ):
+        console.print(f"Application {value}: {count}")
     total = conn.execute("SELECT count(*) FROM jobs").fetchone()[0]
     reviews = dict(conn.execute("SELECT decision,count(*) FROM job_reviews GROUP BY decision"))
     console.print(
@@ -379,6 +469,16 @@ def _run(args, cfg):
             console.print(
                 "Profile is unreviewed; edit your candidate YAML before relying on these preferences."
             )
+        if args.command in ("diff", "state"):
+            row = conn.execute("SELECT id FROM jobs WHERE id=?", (args.job,)).fetchone()
+            if not row:
+                raise ValueError("Unknown job ID")
+            if args.command == "diff":
+                console.print(_text(materials.material_diff(conn, args.job, args.kind)))
+            else:
+                materials.state(conn, args.job, args.value)
+                console.print(f"Application {args.job}: {args.value}")
+            return 0
         sources = load_sources(cfg.resolved(cfg.sources_path))
         if args.command in ("scan", "analyze"):
             from app.resume import require_reviewed
@@ -412,13 +512,65 @@ def _run(args, cfg):
         from app.analyst import attach_evaluations
 
         ranked = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources))
+        if args.command in ("letters", "resume", "pdf", "answers"):
+            from app.resume import require_reviewed
+
+            require_reviewed(cfg, profile)
+            selected = [r for r in ranked if not args.job or r["id"] == args.job]
+            if args.job and not selected:
+                raise ValueError("Unknown or ineligible job ID")
+            if args.command == "letters":
+                done = materials.write_letters(cfg, conn, profile, selected, force=args.force)
+                console.print(
+                    f"Prepared {done} letters. Review shows warnings and fact provenance."
+                )
+            elif args.command == "answers":
+                if args.add:
+                    if not args.job:
+                        raise ValueError("--add requires --job")
+                    answers.add_question(conn, args.job, args.add, args.option, not args.optional)
+                if not args.show and not sys.stdin.isatty():
+                    raise ValueError("answers needs an interactive terminal, or use --show")
+                selected = [
+                    r
+                    for r in selected
+                    if args.job
+                    or conn.execute(
+                        "SELECT 1 FROM screening_questions WHERE job_id=?", (r["id"],)
+                    ).fetchone()
+                ]
+                answers.collect(
+                    cfg,
+                    conn,
+                    profile,
+                    selected,
+                    interactive=not args.show,
+                    output=lambda text: console.print(_text(text)),
+                )
+                console.print(
+                    f"Screening drafts saved; answer bank: {cfg.resolved(cfg.apply.answers_file)}"
+                )
+            else:
+                row = selected[0]
+                if args.command == "resume":
+                    item = materials.tailored_resume(cfg, conn, profile, row)
+                    console.print(_text(item["path"]))
+                else:
+                    path, issues = materials.build_resume_pdf(cfg, conn, profile, row)
+                    console.print(_text(path))
+                    for issue in issues:
+                        console.print(_text("ATS WARNING: " + issue))
+                    if issues:
+                        return 1
+                    console.print("ATS check passed: name, email and sections extract in order.")
+            return 0
         rows = _select(
             ranked, args, review=args.command == "review", min_score=cfg.analyst.min_score
         )
         if args.command == "list":
             _list(rows)
         elif args.command == "review":
-            _review(conn, rows)
+            _review(conn, rows, cfg, profile)
         elif args.command == "export":
             args.path.write_text(export_csv(rows), encoding="utf-8-sig")
             console.print(f"Exported {len(rows)} jobs to {args.path}")
@@ -447,6 +599,39 @@ def main(argv=None) -> int:
     sub.add_parser("sync", help="Fetch public sources, respecting persistent cooldowns")
     sub.add_parser("scan", help="Sync public sources and score eligible jobs")
     sub.add_parser("analyze", help="Score stored jobs with missing or stale evaluations")
+    letters = sub.add_parser("letters", help="Batch checked cover letters at analyst.min_score")
+    letters.add_argument("--job", type=_positive)
+    letters.add_argument(
+        "--force", action="store_true", help="Create a new version even if current"
+    )
+    for command, help_text in (
+        ("resume", "Tailor reviewed facts as editable Markdown"),
+        ("pdf", "Build job resume PDF and run ATS checks"),
+    ):
+        preparation = sub.add_parser(command, help=help_text)
+        preparation.add_argument("job", type=_positive)
+    screening = sub.add_parser(
+        "answers", help="Answer missing screening questions; reuse answers.yaml"
+    )
+    screening.add_argument("--job", type=_positive)
+    screening.add_argument(
+        "--add", help="Register a screening question (no browser discovery in M3)"
+    )
+    screening.add_argument("--option", action="append", default=[])
+    screening.add_argument("--optional", action="store_true")
+    screening.add_argument(
+        "--show",
+        action="store_true",
+        help="Save drafts and list unanswered questions without prompting",
+    )
+    diff = sub.add_parser("diff", help="Diff latest two material versions")
+    diff.add_argument("job", type=_positive)
+    diff.add_argument("--kind", choices=["letter", "resume", "answers"])
+    mark = sub.add_parser("state", help="Set preparation state (approval/submitted require review)")
+    mark.add_argument("job", type=_positive)
+    mark.add_argument(
+        "value", choices=[s for s in materials.STATES if s not in ("approved", "submitted")]
+    )
     _filters(sub.add_parser("list", help="List matching jobs, highest score first"))
     _filters(sub.add_parser("review", help="Review jobs with single-key decisions"), review=True)
     exp = sub.add_parser("export", help="Export matching jobs to CSV")

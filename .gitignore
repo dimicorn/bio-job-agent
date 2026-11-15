@@ -17,3 +17,6 @@ resume.md
 *.egg-info/
 dist/
 .DS_Store
+
+answers.yaml
+materials/

@@ -1,0 +1,6 @@
+# User-confirmed answers only. Copy to answers.yaml and fill with your own facts.
+# Keys ignore case, trailing punctuation and required markers.
+# An employer-specific key overrides the shared answer, e.g.:
+# "Synthetic Bio: How did you hear about us?": Careers page
+# Legal, visa, salary and demographic answers are always entered by you.
+{}

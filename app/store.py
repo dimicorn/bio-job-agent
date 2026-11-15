@@ -9,6 +9,7 @@ from app.pipeline.filter import exclusion, geography
 def list_jobs(conn, profile, sources):
     current_sources = {s.id: s for s in sources if s.enabled}
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
+    applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
     result = []
     for row in conn.execute("SELECT * FROM jobs ORDER BY discovered_at DESC,id DESC"):
         job = Posting.model_validate_json(row["payload"])
@@ -37,6 +38,7 @@ def list_jobs(conn, profile, sources):
                 "last_verified_at": row["last_verified_at"],
                 "status": row["status"],
                 "review": reviews.get(row["id"], "new"),
+                "application_state": applications.get(row["id"]),
                 "geography": geography(job, profile),
                 "origins": origins,
             }
@@ -53,6 +55,10 @@ def review_job(conn, job_id: int, decision: str) -> None:
         decided_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
         (job_id, decision),
     )
+    if decision == "saved":
+        conn.execute(
+            "INSERT OR IGNORE INTO applications(job_id,state) VALUES (?, 'saved')", (job_id,)
+        )
     # Each keypress survives quitting/interruption later in the review session.
     conn.commit()
 
@@ -85,6 +91,7 @@ CSV_FIELDS = [
     "discovered_at",
     "last_verified_at",
     "review",
+    "application_state",
     "apply_url",
     "source_url",
     "provenance",

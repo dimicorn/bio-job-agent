@@ -1,0 +1,491 @@
+import io
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+import yaml
+from rich.console import Console
+
+from app import answers, applications, cli, materials, resume
+from app.candidate.profile import Fact, import_profile
+from app.pipeline.discover import discover
+from app.settings import Analyst, Apply, Settings
+from app.store import list_jobs, review_job
+
+
+@pytest.fixture
+def preparation(tmp_path, conn, profile, sources, transport):
+    cfg = Settings(
+        _env_file=None,
+        resume_path=tmp_path / "resume.md",
+        materials_path=tmp_path / "materials",
+        llm_state_dir=tmp_path,
+        env_path=tmp_path / ".env",
+        database_path=tmp_path / "jobs.sqlite3",
+        candidate_path=tmp_path / "candidate.yaml",
+        config_path=tmp_path / "config.yaml",
+        analyst=Analyst(backend="command", batch_size=2, parallel=1),
+        apply=Apply(active_hours=(0, 24), answers_file=tmp_path / "answers.yaml"),
+    )
+    cfg.resume_path.write_text(
+        "# Alex Example\nalex@example.org\n\n## Experience\nDeveloped cell assays.\n\n## Skills\nPython analysis.\n\n## Education\nBSc at Example University.\n"
+    )
+    profile.name = "Alex Example"
+    profile.reviewed = True
+    profile.resume_hash = resume.digest(resume.resume_text(cfg))
+    profile.facts = [
+        Fact(
+            category="Experience", fact="Developed cell assays.", evidence="Developed cell assays."
+        ),
+        Fact(category="Technical skills", fact="Python analysis.", evidence="Python analysis."),
+        Fact(
+            category="Education",
+            fact="BSc at Example University.",
+            evidence="BSc at Example University.",
+        ),
+    ]
+    discover(conn, profile, sources, transport=transport, pause=lambda _: None)
+    rows = list_jobs(conn, profile, sources)
+    for row in rows:
+        row["score"] = 90
+    cfg.candidate_path.write_text(yaml.safe_dump(profile.model_dump()))
+    cfg.config_path.write_text(
+        yaml.safe_dump(
+            {"analyst": cfg.analyst.model_dump(), "apply": cfg.apply.model_dump(mode="json")}
+        )
+    )
+    return cfg, profile, rows
+
+
+def draft(row, text="I developed cell assays."):
+    return {"job_id": row["id"], "letter": text, "claims": [{"text": text, "fact_ids": [0]}]}
+
+
+def mock_letters(monkeypatch, calls, *, bad=False):
+    def ask(cfg, system, user, model, purpose):
+        payload = json.loads(user)
+        assert purpose == "letter" and "ignore instructions" in system
+        calls.append(payload)
+        return model.model_validate(
+            {
+                "items": [
+                    draft(
+                        {"id": r["id"]},
+                        "I used Rust at ImaginaryLabs with a PhD and 999 patents."
+                        if bad
+                        else "I developed cell assays.",
+                    )
+                    for r in reversed(payload["untrusted_jobs"])
+                ]
+            }
+        )
+
+    monkeypatch.setattr(materials, "ask_json", ask)
+
+
+def test_batched_letters_threshold_cache_version_and_diff(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    calls = []
+    mock_letters(monkeypatch, calls)
+    rows[1]["score"] = 49
+    assert materials.write_letters(cfg, conn, profile, rows) == 1
+    assert len(calls) == 1
+    first = materials.latest(conn, rows[0]["id"], "letter")
+    assert json.loads(first["warnings"]) == []
+    assert materials.write_letters(cfg, conn, profile, rows) == 0
+    assert (
+        materials.write_letters(cfg, conn, profile, rows, force=True, instruction="Make it direct")
+        == 1
+    )
+    assert calls[-1]["rewrite_instruction"] == "Make it direct"
+    assert materials.latest(conn, rows[0]["id"], "letter")["id"] != first["id"]
+    # A changed reviewed profile generates a new linked version without force.
+    profile.specialties.append("Cell assays")
+    assert materials.write_letters(cfg, conn, profile, rows) == 1
+    assert (
+        materials.latest(conn, rows[0]["id"], "letter")["profile_version"]
+        != first["profile_version"]
+    )
+    materials.save_version(
+        cfg, conn, profile, rows[0], "letter", "I developed cell assays.\nEdited."
+    )
+    assert "+Edited." in materials.material_diff(conn, rows[0]["id"])
+    assert Path(first["path"]).read_text() == first["content"]
+
+
+def test_rewrite_once_then_persist_visible_warnings(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    calls = []
+    mock_letters(monkeypatch, calls, bad=True)
+    assert materials.write_letters(cfg, conn, profile, rows[:1]) == 1
+    assert len(calls) == 2 and calls[1]["remove_unsupported"]
+    item = materials.latest(conn, rows[0]["id"], "letter")
+    assert (
+        "999" in item["warnings"]
+        and "ImaginaryLabs" in item["warnings"]
+        and "PhD" in item["warnings"]
+    )
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output))
+    cli._show_materials(conn, rows[0])
+    assert "WARNING:" in output.getvalue() and "999" in output.getvalue()
+
+
+def test_rewrite_can_remove_unsupported_claims(preparation, monkeypatch):
+    cfg, profile, rows = preparation
+    responses = iter([draft(rows[0], "I used Docker for 999 years."), draft(rows[0])])
+    monkeypatch.setattr(
+        materials,
+        "ask_json",
+        lambda *a: materials.Letters(items=[materials.Letter.model_validate(next(responses))]),
+    )
+    result = materials.write_batch(cfg, profile, rows[:1])
+    assert result[0][2] == []
+
+
+def test_invalid_ids_block_failed_batch(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    monkeypatch.setattr(materials, "ask_json", lambda *a: materials.Letters(items=[]))
+    with pytest.raises(RuntimeError, match="failed batches"):
+        materials.write_letters(cfg, conn, profile, rows)
+    assert conn.execute("SELECT count(*) FROM applications WHERE state='blocked'").fetchone()[
+        0
+    ] == len(rows)
+    assert not conn.execute("SELECT * FROM material_versions").fetchall()
+
+
+def test_unreviewed_or_changed_resume_blocks_generation(preparation, conn):
+    cfg, profile, rows = preparation
+    profile.reviewed = False
+    with pytest.raises(ValueError, match="review"):
+        materials.tailored_resume(cfg, conn, profile, rows[0])
+    profile.reviewed = True
+    cfg.resume_path.write_text("changed")
+    with pytest.raises(ValueError, match="Resume changed"):
+        materials.write_letters(cfg, conn, profile, rows)
+
+
+def test_fact_provenance_and_job_only_qualifications(preparation):
+    _cfg, profile, rows = preparation
+    row = {**rows[0], "description": "PhD in Python with 999 patents."}
+    item = materials.Letter.model_validate(draft(row, "I have a PhD and 999 patents."))
+    issues = materials.letter_issues(item, profile, row)
+    assert any("degree" in x for x in issues)
+    item.claims[0].fact_ids = [999]
+    assert any("provenance" in x for x in materials.letter_issues(item, profile, row))
+    assert any(
+        "employer" in x for x in materials.unsupported("Worked at ImaginaryLabs.", "Cell assays")
+    )
+    assert any(
+        "technology" in x
+        for x in materials.unsupported("Python analysis", "Cell assays", "Python required")
+    )
+
+
+def test_tailored_resume_copies_verified_facts_and_preserves_contact(preparation, conn):
+    cfg, profile, rows = preparation
+    rows[0]["description"] = "Python analysis"
+    item = materials.tailored_resume(cfg, conn, profile, rows[0])
+    assert item["content"].index("Python analysis.") < item["content"].index(
+        "Developed cell assays."
+    )
+    assert "alex@example.org" in item["content"]
+    assert len(json.loads(item["provenance"])["facts"]) == 3
+    assert item["profile_version"] == import_profile(conn, profile)
+
+
+def test_editor_flags_and_new_version(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    materials.save_version(cfg, conn, profile, rows[0], "letter", "Original")
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "some-editor --wait")
+
+    def edit(command, **kwargs):
+        assert command[:2] == ["some-editor", "--wait"]
+        Path(command[2]).write_text("I developed cell assays.")
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(materials.subprocess, "run", edit)
+    item = materials.edit_letter(cfg, conn, profile, rows[0])
+    assert item["content"] == "I developed cell assays."
+    assert (
+        conn.execute("SELECT count(*) FROM material_versions WHERE kind='letter'").fetchone()[0]
+        == 2
+    )
+
+
+def test_answer_bank_normalization_employer_options_and_sensitive_missing(preparation, conn):
+    cfg, profile, rows = preparation
+    row, other = rows
+    answers.add_question(conn, row["id"], "Do you require visa sponsorship? *", ["Yes", "No"])
+    answers.add_question(conn, row["id"], "Salary expectations?")
+    assert all(x["source"] == "needs_human" for x in answers.plan(cfg, conn, row))
+    answers.save_answer(cfg, "DO YOU REQUIRE VISA SPONSORSHIP?", "No")
+    assert answers.plan(cfg, conn, row)[0]["answer"] == ["No"]
+    answers.add_question(
+        conn, other["id"], "Do you require visa sponsorship?", ["I do", "I do not"]
+    )
+    assert not answers.plan(cfg, conn, other)[0]["answer"]
+    answers.save_answer(cfg, "Do you require visa sponsorship?", "I do not", other["employer"])
+    assert answers.plan(cfg, conn, other)[0]["answer"] == ["I do not"]
+    assert (
+        answers.lookup(
+            answers.load_answers(cfg), "Another employer", "Do you require visa sponsorship?"
+        )
+        == "No"
+    )
+    snapshot = answers.snapshot(cfg, conn, profile, row)
+    assert "Salary" in snapshot["warnings"]
+    assert cfg.apply.answers_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_answers_reuse_across_employers(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    for row in rows:
+        answers.add_question(conn, row["id"], "A confirmed fact?")
+    calls = []
+    monkeypatch.setattr("builtins.input", lambda _: calls.append(True) or "User confirmed")
+    answers.collect(cfg, conn, profile, rows, interactive=True, output=lambda _: None)
+    assert len(calls) == 1
+    assert all(not json.loads(materials.latest(conn, r["id"], "answers")["warnings"]) for r in rows)
+
+
+def ready(cfg, conn, profile, row, monkeypatch):
+    materials.save_version(cfg, conn, profile, row, "letter", "I developed cell assays.")
+    materials.tailored_resume(cfg, conn, profile, row)
+    answers.snapshot(cfg, conn, profile, row)
+    monkeypatch.setattr(materials, "browser_available", lambda: True)
+    monkeypatch.setattr(materials, "render_pdf", lambda text, out: out.write_bytes(b"fake-pdf"))
+    monkeypatch.setattr(materials, "ats_check", lambda *a: [])
+    materials.build_resume_pdf(cfg, conn, profile, row)
+
+
+def test_manual_approval_only_and_confirmed_submission(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    review_job(conn, row["id"], "saved")
+    assert (
+        conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[0]
+        == "saved"
+    )
+    ready(cfg, conn, profile, row, monkeypatch)
+    paths = applications.approve(cfg, conn, profile, row)
+    assert len(paths) == 4 and all(Path(p).exists() for p in paths)
+    assert row["application_state"] == "approved"
+    assert (
+        conn.execute(
+            "SELECT submitted_at FROM applications WHERE job_id=?", (row["id"],)
+        ).fetchone()[0]
+        is None
+    )
+    with pytest.raises(ValueError, match="Type submitted"):
+        applications.confirm_submitted(conn, row, "no")
+    applications.confirm_submitted(conn, row, "submitted")
+    assert row["application_state"] == "submitted"
+    assert conn.execute(
+        "SELECT submitted_at FROM applications WHERE job_id=?", (row["id"],)
+    ).fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    "gate,value,error",
+    [
+        ("min_score", 99, "threshold"),
+        ("active_hours", (0, 1), "active_hours"),
+        ("max_per_run", 1, "max_per_run"),
+    ],
+)
+def test_apply_gates(preparation, conn, monkeypatch, gate, value, error):
+    cfg, profile, rows = preparation
+    ready(cfg, conn, profile, rows[0], monkeypatch)
+    setattr(cfg.apply, gate, value)
+    with pytest.raises(ValueError, match=error):
+        applications.approve(
+            cfg,
+            conn,
+            profile,
+            rows[0],
+            approved_this_run=1,
+            now=datetime(2026, 11, 15, 12, tzinfo=UTC),
+        )
+
+
+def test_approval_rejects_stale_changed_missing_and_warned_materials(
+    preparation, conn, monkeypatch
+):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    ready(cfg, conn, profile, row, monkeypatch)
+    item = materials.latest(conn, row["id"], "letter")
+    Path(item["path"]).write_text("changed outside app")
+    with pytest.raises(ValueError, match="file changed"):
+        applications.approve(cfg, conn, profile, row)
+    Path(item["path"]).write_text(item["content"])
+    profile.specialties.append("changed")
+    with pytest.raises(ValueError, match="stale"):
+        applications.approve(cfg, conn, profile, row)
+    profile.specialties.pop()
+    materials.save_version(cfg, conn, profile, row, "letter", "999 patents", ["Unsupported number"])
+    with pytest.raises(ValueError, match="warnings"):
+        applications.approve(cfg, conn, profile, row)
+
+
+def test_pdf_missing_browser_is_actionable(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    monkeypatch.setattr(materials, "browser_available", lambda: False)
+    with pytest.raises(ValueError, match="playwright install chromium"):
+        materials.build_resume_pdf(cfg, conn, profile, rows[0])
+    assert materials.latest(conn, rows[0]["id"], "resume")
+
+
+def test_real_pdf_and_edit_version(preparation, conn):
+    if not materials.browser_available():
+        pytest.skip("Chromium unavailable: uv run playwright install chromium")
+    cfg, profile, rows = preparation
+    item = materials.tailored_resume(cfg, conn, profile, rows[0])
+    Path(item["path"]).write_text(item["content"] + "\n<!-- local note -->\n")
+    out, issues = materials.build_resume_pdf(cfg, conn, profile, rows[0])
+    assert not issues
+    assert out.read_bytes().startswith(b"%PDF")
+    assert materials.latest(conn, rows[0]["id"], "resume")["id"] != item["id"]
+
+
+def test_ats_detects_missing_contact_and_section_order(tmp_path, monkeypatch):
+    import pdfminer.high_level
+
+    monkeypatch.setattr(
+        pdfminer.high_level, "extract_text", lambda _: "Wrong Name Skills Experience"
+    )
+    issues = materials.ats_check(
+        tmp_path / "fake.pdf",
+        "# Alex Example\nalex@example.org\n## Experience\nAssays\n## Skills\nPython",
+        "Alex Example",
+    )
+    assert len(issues) == 3
+
+
+def test_preparation_commands_and_state_visibility(preparation, conn, sources, monkeypatch):
+    cfg, _profile, rows = preparation
+    monkeypatch.setattr(cli, "Settings", lambda: cfg)
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    row = rows[0]
+    assert cli.main(["resume", str(row["id"])]) == 0
+    assert cli.main(["diff", str(row["id"])]) == 0
+    assert cli.main(["answers", "--job", str(row["id"]), "--add", "Visa status?", "--show"]) == 0
+    assert cli.main(["state", str(row["id"]), "manual_required"]) == 0
+    assert cli.main(["list", "--all-scores", "--application-state", "manual_required"]) == 0
+    assert cli.main(["stats"]) == 0
+    assert "manual_required" in output.getvalue() and "Apply mode: manual" in output.getvalue()
+
+
+def test_review_manual_fallback_and_submission_keys(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = "auto"
+    ready(cfg, conn, profile, row, monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    keys = iter("atq")
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    monkeypatch.setattr("builtins.input", lambda _: "submitted")
+    opened = []
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output))
+    cli._review(conn, [row], cfg, profile)
+    assert opened == [row["apply_url"]]
+    assert "Browser filling arrives in M4" in output.getvalue()
+    assert row["application_state"] == "submitted"
+
+
+@pytest.mark.live
+def test_live_synthetic_letter(request, tmp_path):
+    if not request.config.getoption("--live") or os.environ.get("BIO_LIVE_LETTER") != "1":
+        pytest.skip("Set BIO_LIVE_LETTER=1 and pass --live -m live to spend a letter request")
+    from app.candidate.profile import CandidateProfile
+
+    cfg = Settings(
+        _env_file=None,
+        resume_path=tmp_path / "resume.md",
+        env_path=tmp_path / ".env",
+        llm_state_dir=tmp_path,
+        analyst=Analyst(backend=os.environ.get("BIO_LIVE_BACKEND", "codex"), timeout=120),
+    )
+    cfg.resume_path.write_text("# Alex Example\nDeveloped cell assays.")
+    profile = CandidateProfile(
+        name="Alex Example",
+        reviewed=True,
+        resume_hash=resume.digest(resume.resume_text(cfg)),
+        target_titles=["Scientist"],
+        facts=[
+            Fact(
+                category="technical",
+                fact="Developed cell assays.",
+                evidence="Developed cell assays.",
+            )
+        ],
+    )
+    row = {
+        "id": 1,
+        "title": "Scientist",
+        "employer": "Synthetic Bio",
+        "description": "Cell assay development in London.",
+        "apply_url": "https://example.com/job",
+    }
+    result = materials.write_batch(cfg, profile, [row])
+    assert result[0][1].letter and result[0][1].claims
+    assert not any("999" in x for x in result[0][2])
+    print(f"Live letter backend: {cfg.analyst.backend}; warnings={result[0][2]}")
+
+
+def test_rewrite_failure_retains_reviewable_draft(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    calls = []
+
+    def ask(*args):
+        calls.append(True)
+        if len(calls) > 1:
+            raise RuntimeError("provider unavailable")
+        return materials.Letters(
+            items=[materials.Letter.model_validate(draft(rows[0], "I used Docker for 999 years."))]
+        )
+
+    monkeypatch.setattr(materials, "ask_json", ask)
+    assert materials.write_letters(cfg, conn, profile, rows[:1]) == 1
+    item = materials.latest(conn, rows[0]["id"], "letter")
+    assert "999" in item["content"] and "Guided rewrite failed" in item["warnings"]
+
+
+def test_daily_limit_and_pdf_integrity(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    cfg.apply.daily_limit = 1
+    for row in rows:
+        ready(cfg, conn, profile, row, monkeypatch)
+    applications.approve(cfg, conn, profile, rows[0])
+    applications.confirm_submitted(conn, rows[0], "submitted")
+    with pytest.raises(ValueError, match="daily_limit"):
+        applications.approve(cfg, conn, profile, rows[1])
+    cfg.apply.daily_limit = 5
+    item = materials.latest(conn, rows[1]["id"], "resume")
+    Path(item["pdf_path"]).write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="PDF changed"):
+        applications.approve(cfg, conn, profile, rows[1])
+
+
+def test_changed_answers_require_new_draft(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    ready(cfg, conn, profile, row, monkeypatch)
+    answers.add_question(conn, row["id"], "Salary expectation?")
+    with pytest.raises(ValueError, match="Screening answers changed"):
+        applications.approve(cfg, conn, profile, row)
+    answers.snapshot(cfg, conn, profile, row)
+    with pytest.raises(ValueError, match="warnings"):
+        applications.approve(cfg, conn, profile, row)
+    cfg.apply.answers_file.write_text("'Salary expectation?': '  '\n")
+    assert not answers.plan(cfg, conn, row)[0]["answer"]
+    answers.save_answer(cfg, "Salary expectation?", "User-provided salary")
+    answers.snapshot(cfg, conn, profile, row)
+    assert applications.approve(cfg, conn, profile, row)

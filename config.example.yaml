@@ -47,3 +47,12 @@ analyst:
 #   provider: deepseek
 #   model: deepseek-flash
 #   api_key_env: DEEPSEEK_API_KEY
+
+# M3 hands off to your browser; assisted/auto filling arrives in M4.
+apply:
+  mode: manual  # manual | assisted | auto
+  daily_limit: 5
+  max_per_run: 5
+  min_score: 80
+  active_hours: [8, 23]  # local time, inclusive start / exclusive end
+  answers_file: answers.yaml

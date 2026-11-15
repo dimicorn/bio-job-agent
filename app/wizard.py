@@ -13,7 +13,7 @@ from rich.console import Console
 from app.candidate.profile import import_profile, load_profile
 from app.db import connect, migrate
 from app.llm import check, fallback_cfg
-from app.settings import ROOT, Analyst, Settings
+from app.settings import ROOT, Analyst, Apply, Settings
 
 console = Console(markup=False)
 OPTIONS = [
@@ -165,6 +165,37 @@ def setup(cfg: Settings) -> bool:
         path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         configured = cfg.with_config()
         console.print(f"Saved LLM config: {path}")
+
+    if "apply" not in document or _yes("Apply settings exist. Configure mode and gates again?"):
+        apply = Apply.model_validate(document.get("apply", {}))
+        modes = ["manual", "assisted", "auto"]
+        apply.mode = modes[_pick("Apply mode (assisted/auto use manual handoff until M4):", modes)]
+        for field in ("daily_limit", "max_per_run", "min_score"):
+            while True:
+                try:
+                    apply = Apply.model_validate(
+                        {
+                            **apply.model_dump(),
+                            field: int(_ask(f"Apply {field}", str(getattr(apply, field)))),
+                        }
+                    )
+                    break
+                except ValueError:
+                    console.print("Enter a valid limit (positive; score 0–100).")
+        while True:
+            try:
+                hours = _ask(
+                    "Active hours in local time: start,end", ",".join(map(str, apply.active_hours))
+                )
+                apply = Apply.model_validate(
+                    {**apply.model_dump(), "active_hours": [int(x) for x in hours.split(",")]}
+                )
+                break
+            except ValueError:
+                console.print("Use start,end with 0 <= start < end <= 24.")
+        document["apply"] = apply.model_dump(mode="json")
+        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+        configured = cfg.with_config()
 
     candidate = cfg.resolved(cfg.candidate_path)
     if candidate == ROOT / "config/candidate.example.yaml":

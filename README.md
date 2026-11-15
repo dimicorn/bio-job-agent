@@ -106,3 +106,108 @@ CI is configured for offline tests; no CI run or remote operation was performed 
 The adapters perform GET requests against documented public ATS APIs and reviewed public careers pages. They check the current API host's robots file before listing retrieval, obey crawl delay/request rate, pace requests at least one second apart per host, and enforce a persistent 15-minute source refresh interval by default. They do not retry automatically; 429 `Retry-After` extends the cooldown. A disallow rule, unavailable robots response, authentication restriction, redirect, or access denial stops that source. There is no LinkedIn retrieval, browser automation or CAPTCHA handling. Re-review provider/employer terms before expanding the watchlist. See [source evidence and fallbacks](docs/STATUS.md).
 
 Descriptions are untrusted data: HTML is converted to plain text, and scoring prompts JSON-delimit employer content and explicitly forbid following its instructions; CSV cells are protected against spreadsheet formulas. Discovery sends no candidate profile to employers or external AI services; extraction/scoring send candidate data to your configured LLM backend. The database is local and **not encrypted by the application**; use OS disk protection and private filesystem permissions. `.env`, `resume.md`, personal candidate YAML, databases and virtual environments are gitignored. Retain local exports privately. Stop the app before deleting the SQLite database (and associated WAL/SHM files) to erase stored profile versions, extraction/scoring history and discovery history. Keep your editable candidate YAML only as long as needed.
+
+
+### Application preparation (M3)
+
+Preparation uses your reviewed candidate profile and its matching resume hash. Run
+`extract-profile`, review the facts and set `reviewed: true` before generating materials.
+Job preferences never count as qualifications. Prepare a scored job like this:
+
+```bash
+uv run bio-jobs letters                 # batches jobs at analyst.min_score
+uv run bio-jobs letters --job 42 --force # keep a new version of an existing letter
+uv run bio-jobs resume 42               # tailored, editable Markdown
+uv run bio-jobs pdf 42                  # Chromium PDF plus pdfminer ATS text check
+uv run bio-jobs answers --job 42 --show # prepare screening draft, including an empty draft
+uv run bio-jobs review --status all
+uv run bio-jobs diff 42                 # latest two versions, all material types
+```
+
+Resume tailoring orders the reviewed facts by relevance to the job, preserving their
+wording, contact lines from the reviewed resume, and fact/evidence references. It does
+not ask a model to invent or expand experience. Edit the resulting Markdown path and
+run `pdf 42` to capture a new version and rebuild it. The ATS check verifies the name,
+email, section order and text ligatures. Missing contact details require your edit.
+`./setup.sh` installs Chromium; `doctor` reports when it is missing. Install it manually
+with `uv run playwright install chromium` if needed.
+
+Letters are written in the vacancy's language through the configured LLM. Each generated
+candidate claim cites reviewed fact IDs. A deterministic check looks for unsupported
+numbers, technologies, employers, degrees, names and invalid/missing fact references.
+Job text can support statements about the employer, but job requirements do not establish
+candidate experience. Each candidate claim is checked against its cited facts as well.
+A failing draft receives one guided rewrite. If it still fails, or the rewrite fails,
+the draft is saved with visible review warnings. These lexical checks are conservative;
+read the letter and its cited facts before approving. They do not prove the meaning of
+a paraphrase. Fix warnings by editing or rewriting the letter.
+
+Every letter, resume and screening draft has a database snapshot and an editable file
+under `materials/<job>/`, linked to the job content and reviewed profile version. PDF
+builds also record an integrity hash and ATS warnings. Changed profile/job inputs make
+old materials stale. New edits or generations return the application to `awaiting_review`.
+`diff 42 --kind letter` shows a readable changelog between letter versions. The database
+retains earlier content even if a material file is edited directly.
+
+Register screening questions manually in M3 (browser discovery arrives in M4):
+
+```bash
+uv run bio-jobs answers --job 42 --add 'Do you require visa sponsorship?' --option Yes --option No --show
+uv run bio-jobs answers                  # interactively fill unanswered questions
+```
+
+`answers.yaml` is a private, editable answer bank; start with `answers.example.yaml`.
+Question matching ignores case, required markers and trailing punctuation. Answers are
+reused across employers when their options match. An `Employer: Question` key overrides
+a shared answer. If a shared answer does not fit another employer's options, the interactive
+command saves the replacement for that employer. Enter option numbers separated by commas
+for multiple selections; Enter leaves the question unanswered. Legal, visa, salary,
+demographic and all other unknown answers stay `needs_human` until you supply them.
+Screening draft snapshots retain the actual questions, selected answers and their source.
+
+Review keeps `o` open, `s` save, `r` reject, `l` later, `v` score override and `q` quit.
+Additional keys are:
+
+| Key | Action |
+| --- | --- |
+| `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
+| `w` | Rewrite the letter with your instruction, preserving factual checks. |
+| `d` | Show the material diff. |
+| `a` | Approve the current materials, show letter/Markdown/PDF/answer paths, and open the apply link for manual completion. |
+| `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
+| `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
+
+Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
+no material warnings and no unanswered required screening questions. It only marks the
+job approved and opens its link; it never fills forms or submits. Saving a review decision
+also initializes the application state to `saved`. States are `saved`, `preparing`,
+`awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn` and user-confirmed
+`submitted`. Use `list --application-state awaiting_review`, `stats`, or
+`state 42 manual_required` to inspect or update preparation. `approved` and `submitted`
+require their dedicated review actions.
+
+The setup wizard persists these settings in your local `config.yaml`:
+
+```yaml
+apply:
+  mode: manual       # manual | assisted | auto
+  daily_limit: 5
+  max_per_run: 5
+  min_score: 80
+  active_hours: [8, 23]
+  answers_file: answers.yaml
+```
+
+In M3 all three modes use the manual handoff; `assisted` and `auto` explicitly say browser
+filling arrives in M4. `doctor` and `stats` show the stored mode and gates. Approval enforces
+the higher of analyst/apply score thresholds, the local active-hours window, a per-review
+approval limit and the local-day count of user-confirmed submissions. These gates control
+the CLI handoff, not what you choose to do independently in a browser. No form filling,
+automated submission, scheduling or notifications are included.
+
+Offline material tests mock the LLM. A real PDF test runs when Chromium is available and
+skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no private data):
+
+```bash
+BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synthetic_letter -m live --live -q -s
+```

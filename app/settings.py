@@ -55,6 +55,23 @@ class Analyst(BaseModel):
     output_cost_per_million: float | None = Field(default=None, ge=0)
 
 
+class Apply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["manual", "assisted", "auto"] = "manual"
+    daily_limit: int = Field(default=5, ge=1, le=1000)
+    max_per_run: int = Field(default=5, ge=1, le=1000)
+    min_score: int = Field(default=80, ge=0, le=100)
+    active_hours: tuple[int, int] = (8, 23)
+    answers_file: Path = Path("answers.yaml")
+
+    @model_validator(mode="after")
+    def hours(self):
+        start, end = self.active_hours
+        if not 0 <= start < end <= 24:
+            raise ValueError("apply.active_hours must be [start, end], 0 <= start < end <= 24")
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIO_", env_file=ROOT / ".env", extra="ignore")
     database_path: Path = ROOT / "data/jobs.sqlite3"
@@ -67,6 +84,8 @@ class Settings(BaseSettings):
     env_path: Path = ROOT / ".env"
     llm_state_dir: Path = ROOT / "data"
     analyst: Analyst = Field(default_factory=Analyst)
+    apply: Apply = Field(default_factory=Apply)
+    materials_path: Path = ROOT / "materials"
 
     def resolved(self, path: Path) -> Path:
         return path if path.is_absolute() else ROOT / path
@@ -84,7 +103,12 @@ class Settings(BaseSettings):
         resume_path = Path(data.get("resume", self.resume_path))
         if not resume_path.is_absolute():
             resume_path = path.parent / resume_path
-        return self.model_copy(update={"analyst": analyst, "resume_path": resume_path})
+        apply = Apply.model_validate(data.get("apply", {}))
+        if not apply.answers_file.is_absolute():
+            apply.answers_file = path.parent / apply.answers_file
+        return self.model_copy(
+            update={"analyst": analyst, "resume_path": resume_path, "apply": apply}
+        )
 
     def secret(self, name: str | None) -> str:
         if not name:

@@ -22,5 +22,6 @@ if ! command -v uv >/dev/null 2>&1; then
     sh "$installer"
 fi
 uv sync --project "$PROJECT_DIR" --frozen
+uv run --project "$PROJECT_DIR" playwright install chromium
 uv run --project "$PROJECT_DIR" bio-jobs init
 uv run --project "$PROJECT_DIR" bio-jobs setup
