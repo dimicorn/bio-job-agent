@@ -1,0 +1,63 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://job-boards.greenhouse.io/isomorphiclabs/jobs/5539669004",
+      "internal_job_id": 4904691004,
+      "location": {
+        "name": "London"
+      },
+      "id": 5539669004,
+      "updated_at": "2026-11-06T10:32:08-05:00",
+      "title": "Principal Software Engineer (Infrastructure), London",
+      "content": "&lt;p&gt;Synthetic test description replacing employer prose. Lead industrial scientific research and collaborate with a multidisciplinary team on commercial drug discovery and development.&lt;/p&gt;",
+      "departments": [
+        {
+          "id": 4044354004,
+          "name": "Tech",
+          "child_ids": [],
+          "parent_id": null
+        }
+      ],
+      "offices": [
+        {
+          "id": 4026429004,
+          "name": "London ",
+          "location": "London, England, United Kingdom",
+          "child_ids": [],
+          "parent_id": null
+        }
+      ]
+    },
+    {
+      "absolute_url": "https://job-boards.greenhouse.io/isomorphiclabs/jobs/6251458004",
+      "internal_job_id": 5237624004,
+      "location": {
+        "name": "London"
+      },
+      "id": 6251458004,
+      "updated_at": "2026-11-06T11:42:57-05:00",
+      "title": "Research Leader (In-vitro Pharmacology, Exploratory Sciences), London",
+      "content": "&lt;p&gt;Synthetic test description replacing employer prose. Lead industrial scientific research and collaborate with a multidisciplinary team on commercial drug discovery and development.&lt;/p&gt;",
+      "departments": [
+        {
+          "id": 4044357004,
+          "name": "DDMR",
+          "child_ids": [],
+          "parent_id": null
+        }
+      ],
+      "offices": [
+        {
+          "id": 4026429004,
+          "name": "London ",
+          "location": "London, England, United Kingdom",
+          "child_ids": [],
+          "parent_id": null
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "total": 2
+  }
+}
