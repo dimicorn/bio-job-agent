@@ -39,6 +39,8 @@ uv run bio-jobs review
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
+| `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
+| `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
 | `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **q** quit; shows dimension and must-have evidence |
 | `export <file.csv>` | Export matching stored jobs, review decisions and provenance |
 | `stats` | Job/review counts, source health, LLM calls, tokens and known costs |
@@ -58,7 +60,7 @@ uv run bio-jobs export jobs.csv --since 2026-11-01
 uv run bio-jobs llm-check
 ```
 
-Opening an apply link is the only browser action. Applying remains manual.
+Applications default to manual. Assisted and auto modes use Playwright on supported ATS forms after explicit material approval.
 
 ## LLM configuration
 
@@ -108,7 +110,7 @@ The adapters perform GET requests against documented public ATS APIs and reviewe
 Descriptions are untrusted data: HTML is converted to plain text, and scoring prompts JSON-delimit employer content and explicitly forbid following its instructions; CSV cells are protected against spreadsheet formulas. Discovery sends no candidate profile to employers or external AI services; extraction/scoring send candidate data to your configured LLM backend. The database is local and **not encrypted by the application**; use OS disk protection and private filesystem permissions. `.env`, `resume.md`, personal candidate YAML, databases and virtual environments are gitignored. Retain local exports privately. Stop the app before deleting the SQLite database (and associated WAL/SHM files) to erase stored profile versions, extraction/scoring history and discovery history. Keep your editable candidate YAML only as long as needed.
 
 
-### Application preparation (M3)
+### Application preparation and browser modes
 
 Preparation uses your reviewed candidate profile and its matching resume hash. Run
 `extract-profile`, review the facts and set `reviewed: true` before generating materials.
@@ -149,7 +151,7 @@ old materials stale. New edits or generations return the application to `awaitin
 `diff 42 --kind letter` shows a readable changelog between letter versions. The database
 retains earlier content even if a material file is edited directly.
 
-Register screening questions manually in M3 (browser discovery arrives in M4):
+Browser filling queues unknown questions for `answers`; you can also register them manually:
 
 ```bash
 uv run bio-jobs answers --job 42 --add 'Do you require visa sponsorship?' --option Yes --option No --show
@@ -173,16 +175,16 @@ Additional keys are:
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |
-| `a` | Approve the current materials, show letter/Markdown/PDF/answer paths, and open the apply link for manual completion. |
+| `a` | Approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted/auto prints the `apply` command. |
 | `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
 Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
 no material warnings and no unanswered required screening questions. It only marks the
-job approved and opens its link; it never fills forms or submits. Saving a review decision
+job approved; browser execution is a separate `apply` command. Saving a review decision
 also initializes the application state to `saved`. States are `saved`, `preparing`,
-`awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn` and user-confirmed
-`submitted`. Use `list --application-state awaiting_review`, `stats`, or
+`awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn`, `submitting`,
+`unknown_result` and `submitted`. Use `list --application-state awaiting_review`, `stats`, or
 `state 42 manual_required` to inspect or update preparation. `approved` and `submitted`
 require their dedicated review actions.
 
@@ -196,14 +198,53 @@ apply:
   min_score: 80
   active_hours: [8, 23]
   answers_file: answers.yaml
+  profile_dir: data/browser-profile
+  audit_dir: debug/apply
+  submit_wait_minutes: 10
+  confirmation_timeout_seconds: 45
+  action_seconds: 0.3
 ```
 
-In M3 all three modes use the manual handoff; `assisted` and `auto` explicitly say browser
-filling arrives in M4. `doctor` and `stats` show the stored mode and gates. Approval enforces
-the higher of analyst/apply score thresholds, the local active-hours window, a per-review
-approval limit and the local-day count of user-confirmed submissions. These gates control
-the CLI handoff, not what you choose to do independently in a browser. No form filling,
-automated submission, scheduling or notifications are included.
+```bash
+uv run bio-jobs apply 42           # one previously approved job
+uv run bio-jobs apply              # approved queue, bounded by max_per_run
+uv run bio-jobs autopilot          # auto mode: sync/score, then consume approved queue
+uv run bio-jobs run --no-scan       # alias; use stored approved queue only
+```
+
+`manual` opens the link for completion yourself. `assisted` fills and verifies the form,
+then waits up to `submit_wait_minutes` for you to press Submit and for an acknowledgement.
+`auto` presses Submit once, then waits up to `confirmation_timeout_seconds` for an
+acknowledgement. Both browser modes support Greenhouse (including embedded forms), Lever,
+Workable and Ashby when its board is enabled. Standard HTML controls, common React-select
+controls, Workable choice groups and Ashby choice buttons are supported. Changed or
+unsupported widgets stop for manual handling. No live employer submissions are part of testing.
+
+Identity/contact fields come from the reviewed profile and approved CV; missing contact
+values and screening answers require explicit entries in `answers.yaml`. The approved
+answer bank is pinned too. Unknown required questions, mismatches, legal/visa/demographic
+questions (even with saved answers), assessments, sign-in, MFA and CAPTCHA stop the job as
+`manual_required`, with the reason recorded. The browser stays open for a person; no
+challenge is solved or bypassed. Unknown optional questions are queued and left blank; an unapproved prefilled value stops the job.
+After answering a newly discovered question, rebuild `answers` and approve again.
+
+Browser modes recheck approval, material integrity, the higher of analyst/apply score
+thresholds and local active hours before submission. Daily slots are reserved atomically
+across processes; attempts count conservatively against the local-day limit, including
+manual stops and uncertain results. `max_per_run` bounds attempts. A missing acknowledgement
+becomes `unknown_result`, never an automatic retry. A crash during an attempt, a human
+handoff or a challenge after clicking also leaves a durable retry barrier, even if someone
+later changes the application state. Reconcile these applications on the employer site;
+review → `t` can record a submission you personally verified. Automatic retries are never
+unlocked by a state change. A URL containing “confirmation” and a click alone are insufficient.
+
+Ordinary Chromium uses the gitignored persistent profile; no stealth plugins or fingerprint
+changes are used. Filled-form and confirmation screenshots are saved under the gitignored
+`debug/apply` directory. Application events and attempt records in SQLite retain actions,
+version IDs, the approved answer-bank snapshot, verification hashes, reasons and confirmation evidence. Screenshots contain personal data; keep
+custom profile/audit locations private and ignored too. On a stop or timeout, the CLI
+disconnects and leaves Chromium open. Close the tab after manual handling. The next attempt
+opens a fresh tab, preserving previous handoffs. Scheduling and notifications are out of scope.
 
 Offline material tests mock the LLM. A real PDF test runs when Chromium is available and
 skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no private data):

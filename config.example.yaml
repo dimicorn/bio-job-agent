@@ -48,7 +48,7 @@ analyst:
 #   model: deepseek-flash
 #   api_key_env: DEEPSEEK_API_KEY
 
-# M3 hands off to your browser; assisted/auto filling arrives in M4.
+# Browser modes require reviewed materials and explicit approval in review.
 apply:
   mode: manual  # manual | assisted | auto
   daily_limit: 5
@@ -56,3 +56,8 @@ apply:
   min_score: 80
   active_hours: [8, 23]  # local time, inclusive start / exclusive end
   answers_file: answers.yaml
+  profile_dir: data/browser-profile  # Private persistent Chromium profile, gitignored
+  audit_dir: debug/apply              # Private filled/confirmation screenshots, gitignored
+  submit_wait_minutes: 10             # Assisted: wait for the person and confirmation
+  confirmation_timeout_seconds: 45    # Auto: require acknowledgement after one click
+  action_seconds: 0.3                 # Pause between field actions

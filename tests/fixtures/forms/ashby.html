@@ -1,0 +1,11 @@
+<!doctype html><html><body><h1>Application</h1><form>
+<div data-field-path="_systemfield_name"><label for="name">Full name *</label><input id="name" required></div>
+<div data-field-path="_systemfield_email"><label for="email">Email *</label><input id="email" type="email" required></div>
+<div data-field-path="_systemfield_resume"><label for="resume">Resume *</label><input id="resume" type="file" required></div>
+<div data-field-path="letter"><label for="letter">Cover Letter</label><textarea id="letter"></textarea></div>
+<fieldset data-field-path="focus"><legend>Research focus *</legend>
+<button type="button" data-option="assays" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true');this.nextElementSibling.setAttribute('aria-pressed','false')">Cell assays</button>
+<button type="button" data-option="other" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true');this.previousElementSibling.setAttribute('aria-pressed','false')">Other</button></fieldset>
+<!--EXTRA--><button type="submit">Submit Application</button></form>
+<script>window.__submissions=0; document.querySelector('form').addEventListener('submit', e => {e.preventDefault(); window.__submissions++; /*RESULT*/});</script>
+</body></html>

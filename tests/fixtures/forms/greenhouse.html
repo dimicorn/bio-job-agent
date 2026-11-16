@@ -1,0 +1,13 @@
+<!doctype html><html><body><h1>Scientist application</h1><form>
+<label for="first_name">First Name *</label><input id="first_name" required>
+<label for="last_name">Last Name *</label><input id="last_name" required>
+<label for="email">Email *</label><input id="email" type="email" required>
+<label for="resume">Resume *</label><input id="resume" type="file" required>
+<label for="cover_letter">Cover Letter</label><textarea id="cover_letter"></textarea>
+<label for="focus">Research focus *</label><div class="select__control">
+<input id="focus" role="combobox" aria-required="true" oninput="document.querySelector('#menu').hidden=false">
+<span class="select__singleValue"></span></div>
+<div id="menu" hidden><div class="select__option" role="option" onclick="document.querySelector('.select__singleValue').textContent='Cell assays'; document.querySelector('#focus').value=''; this.parentElement.hidden=true">Cell assays</div></div>
+<!--EXTRA--><button type="submit">Submit Application</button></form>
+<script>window.__submissions=0; document.querySelector('form').addEventListener('submit', e => {e.preventDefault(); window.__submissions++; /*RESULT*/});</script>
+</body></html>

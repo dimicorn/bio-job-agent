@@ -1,0 +1,11 @@
+<!doctype html><html><body><h1>Apply to Scientist</h1><form>
+<label>Full name *<input name="name" required></label>
+<label>Email *<input name="email" type="email" required></label>
+<label>Resume *<input name="resume" type="file" required></label>
+<label>Cover Letter<textarea name="coverLetter"></textarea></label>
+<fieldset class="application-question"><legend>Research focus *</legend>
+<label><input name="focus" type="radio" value="assays" required>Cell assays</label>
+<label><input name="focus" type="radio" value="other">Other</label></fieldset>
+<!--EXTRA--><button id="btn-submit" type="submit">Submit Application</button></form>
+<script>window.__submissions=0; document.querySelector('form').addEventListener('submit', e => {e.preventDefault(); window.__submissions++; /*RESULT*/});</script>
+</body></html>

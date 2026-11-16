@@ -381,7 +381,7 @@ def test_preparation_commands_and_state_visibility(preparation, conn, sources, m
     assert "manual_required" in output.getvalue() and "Apply mode: manual" in output.getvalue()
 
 
-def test_review_manual_fallback_and_submission_keys(preparation, conn, monkeypatch):
+def test_review_browser_mode_approval_and_submission_keys(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     row = rows[0]
     cfg.apply.mode = "auto"
@@ -395,8 +395,8 @@ def test_review_manual_fallback_and_submission_keys(preparation, conn, monkeypat
     output = io.StringIO()
     monkeypatch.setattr(cli, "console", Console(file=output))
     cli._review(conn, [row], cfg, profile)
-    assert opened == [row["apply_url"]]
-    assert "Browser filling arrives in M4" in output.getvalue()
+    assert opened == []
+    assert f"bio-jobs apply {row['id']}" in output.getvalue()
     assert row["application_state"] == "submitted"
 
 

@@ -55,7 +55,7 @@ def run(cfg: Settings, *, online=False) -> int:
         report(
             "Apply mode",
             True,
-            f"{a.mode}; manual handoff in M3; browser filling arrives in M4; "
+            f"{a.mode}; browser modes require approved materials; "
             f"daily_limit={a.daily_limit}, max_per_run={a.max_per_run}, min_score={a.min_score}, "
             f"active_hours={a.active_hours} (local time)",
         )

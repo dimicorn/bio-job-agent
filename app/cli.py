@@ -238,10 +238,16 @@ def _review(conn, rows, cfg=None, profile=None):
                         )
                         approved_this_run += 1
                         console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
-                        if cfg.apply.mode != "manual":
-                            console.print("Browser filling arrives in M4; using manual handoff.")
                         for path in paths:
                             console.print(_text(path))
+                        if cfg.apply.mode != "manual":
+                            console.print(
+                                f"Run bio-jobs apply {row['id']} to fill in {cfg.apply.mode} mode."
+                            )
+                            continue
+                        from app.autopilot import event
+
+                        event(conn, row["id"], None, "manual_open", url=row["apply_url"])
                         if not webbrowser.open(row["apply_url"]):
                             console.print("Could not open browser; use the apply link above.")
                         console.print(
@@ -258,7 +264,12 @@ def _review(conn, rows, cfg=None, profile=None):
                         value = input(
                             "State (saved/preparing/awaiting_review/blocked/manual_required/withdrawn): "
                         ).strip()
-                        if value not in set(materials.STATES) - {"approved", "submitted"}:
+                        if value not in set(materials.STATES) - {
+                            "approved",
+                            "submitted",
+                            "submitting",
+                            "unknown_result",
+                        }:
                             raise ValueError("Use a to approve or t to confirm submission")
                         materials.state(conn, row["id"], value)
                         row["application_state"] = value
@@ -308,7 +319,7 @@ def _show_materials(conn, row):
 
 def _stats(conn, cfg):
     console.print(
-        f"Apply mode: {cfg.apply.mode}; manual handoff in M3; browser filling arrives in M4. "
+        f"Apply mode: {cfg.apply.mode}; "
         f"daily_limit={cfg.apply.daily_limit}, max_per_run={cfg.apply.max_per_run}, "
         f"min_score={cfg.apply.min_score}, active_hours={cfg.apply.active_hours} (local time)"
     )
@@ -480,11 +491,14 @@ def _run(args, cfg):
                 console.print(f"Application {args.job}: {args.value}")
             return 0
         sources = load_sources(cfg.resolved(cfg.sources_path))
-        if args.command in ("scan", "analyze"):
+        if args.command == "autopilot" and cfg.apply.mode != "auto":
+            raise ValueError("autopilot requires apply.mode: auto; review and approve jobs first")
+        poll = args.command == "autopilot" and not args.no_scan
+        if args.command in ("scan", "analyze") or poll:
             from app.resume import require_reviewed
 
             require_reviewed(cfg, profile)
-        if args.command in ("sync", "scan"):
+        if args.command in ("sync", "scan") or poll:
             results = discover(
                 conn, profile, sources, timeout=cfg.http_timeout, user_agent=cfg.user_agent
             )
@@ -499,19 +513,32 @@ def _run(args, cfg):
             console.print(table)
             if args.command == "sync":
                 return int(bool(results) and all(x["status"] == "error" for x in results))
-        if args.command in ("scan", "analyze"):
+        if args.command in ("scan", "analyze") or poll:
             from app.analyst import analyze_new
 
             done = analyze_new(cfg, conn, profile, sources)
             console.print(f"Scored {done} jobs; unchanged evaluations reused.")
-            return int(
-                args.command == "scan"
-                and bool(results)
-                and all(x["status"] == "error" for x in results)
-            )
+            if not poll:
+                return int(
+                    args.command == "scan"
+                    and bool(results)
+                    and all(x["status"] == "error" for x in results)
+                )
         from app.analyst import attach_evaluations
 
         ranked = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources))
+        if args.command in ("apply", "autopilot"):
+            from app.autopilot import run
+
+            run(
+                cfg,
+                conn,
+                profile,
+                ranked,
+                job=getattr(args, "job", None),
+                output=lambda message: console.print(_text(message)),
+            )
+            return 0
         if args.command in ("letters", "resume", "pdf", "answers"):
             from app.resume import require_reviewed
 
@@ -599,6 +626,12 @@ def main(argv=None) -> int:
     sub.add_parser("sync", help="Fetch public sources, respecting persistent cooldowns")
     sub.add_parser("scan", help="Sync public sources and score eligible jobs")
     sub.add_parser("analyze", help="Score stored jobs with missing or stale evaluations")
+    apply = sub.add_parser("apply", help="Apply one approved job or the approved queue")
+    apply.add_argument("job", nargs="?", type=_positive)
+    autopilot = sub.add_parser(
+        "autopilot", aliases=["run"], help="One auto pass: sync, score, then apply approved jobs"
+    )
+    autopilot.add_argument("--no-scan", action="store_true", help="Use stored approved queue only")
     letters = sub.add_parser("letters", help="Batch checked cover letters at analyst.min_score")
     letters.add_argument("--job", type=_positive)
     letters.add_argument(
@@ -614,9 +647,7 @@ def main(argv=None) -> int:
         "answers", help="Answer missing screening questions; reuse answers.yaml"
     )
     screening.add_argument("--job", type=_positive)
-    screening.add_argument(
-        "--add", help="Register a screening question (no browser discovery in M3)"
-    )
+    screening.add_argument("--add", help="Register a screening question manually")
     screening.add_argument("--option", action="append", default=[])
     screening.add_argument("--optional", action="store_true")
     screening.add_argument(
@@ -630,7 +661,12 @@ def main(argv=None) -> int:
     mark = sub.add_parser("state", help="Set preparation state (approval/submitted require review)")
     mark.add_argument("job", type=_positive)
     mark.add_argument(
-        "value", choices=[s for s in materials.STATES if s not in ("approved", "submitted")]
+        "value",
+        choices=[
+            s
+            for s in materials.STATES
+            if s not in ("approved", "submitted", "submitting", "unknown_result")
+        ],
     )
     _filters(sub.add_parser("list", help="List matching jobs, highest score first"))
     _filters(sub.add_parser("review", help="Review jobs with single-key decisions"), review=True)
@@ -644,6 +680,8 @@ def main(argv=None) -> int:
     if args.command in (None, "help"):
         parser.print_help()
         return 0
+    if args.command == "run":
+        args.command = "autopilot"
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         cfg = Settings()

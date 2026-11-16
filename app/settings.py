@@ -63,6 +63,11 @@ class Apply(BaseModel):
     min_score: int = Field(default=80, ge=0, le=100)
     active_hours: tuple[int, int] = (8, 23)
     answers_file: Path = Path("answers.yaml")
+    profile_dir: Path = Path("data/browser-profile")
+    audit_dir: Path = Path("debug/apply")
+    submit_wait_minutes: float = Field(default=10, gt=0, le=120)
+    confirmation_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    action_seconds: float = Field(default=0.3, ge=0, le=10)
 
     @model_validator(mode="after")
     def hours(self):
@@ -104,8 +109,10 @@ class Settings(BaseSettings):
         if not resume_path.is_absolute():
             resume_path = path.parent / resume_path
         apply = Apply.model_validate(data.get("apply", {}))
-        if not apply.answers_file.is_absolute():
-            apply.answers_file = path.parent / apply.answers_file
+        for field in ("answers_file", "profile_dir", "audit_dir"):
+            value = getattr(apply, field)
+            if not value.is_absolute():
+                setattr(apply, field, path.parent / value)
         return self.model_copy(
             update={"analyst": analyst, "resume_path": resume_path, "apply": apply}
         )

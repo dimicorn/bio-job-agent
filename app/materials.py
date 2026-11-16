@@ -26,6 +26,8 @@ STATES = (
     "manual_required",
     "withdrawn",
     "submitted",
+    "submitting",
+    "unknown_result",
 )
 # Conservative vocabulary plus open-ended capitalized terms, employer/degree patterns below.
 TECH = re.compile(
@@ -79,6 +81,7 @@ def job_hash(row):
 def state(conn, job_id, value):
     if value not in STATES:
         raise ValueError("Unknown application state")
+    previous = conn.execute("SELECT state FROM applications WHERE job_id=?", (job_id,)).fetchone()
     conn.execute(
         """INSERT INTO applications(job_id,state) VALUES (?,?)
         ON CONFLICT(job_id) DO UPDATE SET state=excluded.state,
@@ -86,6 +89,10 @@ def state(conn, job_id, value):
         submitted_at=CASE WHEN excluded.state='submitted'
         THEN strftime('%Y-%m-%dT%H:%M:%f+00:00','now') ELSE applications.submitted_at END""",
         (job_id, value),
+    )
+    conn.execute(
+        "INSERT INTO application_events(job_id,action,detail) VALUES (?,?,?)",
+        (job_id, "state", json.dumps({"from": previous[0] if previous else None, "to": value})),
     )
     conn.commit()
 
