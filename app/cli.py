@@ -339,6 +339,9 @@ def _stats(conn, cfg):
         "Last checked",
         "Last success",
         "Next allowed",
+        "Failures",
+        "Last count",
+        "Last error at",
         "Error",
         title="Source health",
     )
@@ -352,6 +355,9 @@ def _stats(conn, cfg):
                     "last_checked_at",
                     "last_success_at",
                     "next_allowed_at",
+                    "consecutive_failures",
+                    "last_count",
+                    "last_error_at",
                     "last_error",
                 )
             )
@@ -491,6 +497,18 @@ def _run(args, cfg):
                 console.print(f"Application {args.job}: {args.value}")
             return 0
         sources = load_sources(cfg.resolved(cfg.sources_path))
+        if args.command == "watch":
+            from app.watch import run
+
+            result = run(
+                cfg,
+                conn,
+                profile,
+                sources,
+                scheduled=args.scheduled,
+                output=lambda message: console.print(_text(message)),
+            )
+            return int(bool(result.get("errors")))
         if args.command == "autopilot" and cfg.apply.mode != "auto":
             raise ValueError("autopilot requires apply.mode: auto; review and approve jobs first")
         poll = args.command == "autopilot" and not args.no_scan
@@ -625,6 +643,12 @@ def main(argv=None) -> int:
     extraction.add_argument("--force", action="store_true", help="Replace the output YAML")
     sub.add_parser("sync", help="Fetch public sources, respecting persistent cooldowns")
     sub.add_parser("scan", help="Sync public sources and score eligible jobs")
+    watch = sub.add_parser("watch", help="One locked sync, score and new/changed job alert pass")
+    watch.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Also run approved autopilot queue when apply.mode is auto",
+    )
     sub.add_parser("analyze", help="Score stored jobs with missing or stale evaluations")
     apply = sub.add_parser("apply", help="Apply one approved job or the approved queue")
     apply.add_argument("job", nargs="?", type=_positive)

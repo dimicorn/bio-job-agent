@@ -11,7 +11,9 @@ def list_jobs(conn, profile, sources):
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
     result = []
-    for row in conn.execute("SELECT * FROM jobs ORDER BY discovered_at DESC,id DESC"):
+    for row in conn.execute(
+        "SELECT * FROM jobs WHERE status='open' ORDER BY discovered_at DESC,id DESC"
+    ):
         job = Posting.model_validate_json(row["payload"])
         origins = [
             dict(x)
@@ -25,6 +27,7 @@ def list_jobs(conn, profile, sources):
             x
             for x in origins
             if x["eligible"]
+            and x["present"]
             and x["source_id"] in current_sources
             and not exclusion(job, current_sources[x["source_id"]], profile)
         ]

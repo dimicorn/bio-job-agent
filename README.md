@@ -1,8 +1,8 @@
 # London biotech job discovery
 
-A local, single-user job discovery and matching tool for Principal / Senior Principal Scientist and related senior R&D jobs around London. Greenhouse, Lever and Workable discovery, public careers-page watchers, reviewed candidate profiles, explainable LLM matching, SQLite history, terminal review, manual application links and CSV export are implemented.
+A local, single-user job discovery and matching tool for Principal / Senior Principal Scientist and related senior R&D jobs around London. Greenhouse, Lever and Workable discovery, public careers-page watchers, reviewed candidate profiles, explainable LLM matching, SQLite history, terminal review, application materials, approved assisted/auto application, scheduled watch passes and CSV export are implemented.
 
-Public ATS JSON → normalize and filter → deduplicate → SQLite → batched scoring → terminal CLI / CSV. Document generation, application submission and scheduling remain deferred. See [verified source status and limitations](docs/STATUS.md).
+Public ATS JSON → normalize and filter → deduplicate → SQLite → batched scoring → terminal review / new-job alerts. Optional native scheduling runs a watch pass and, only in auto mode, the approved application queue. See [verified source status and limitations](docs/STATUS.md).
 
 ## Install
 
@@ -27,6 +27,30 @@ uv run bio-jobs review
 
 `bio-jobs` or `bio-jobs help` shows commands without network access. On the first operational run without `config.yaml`, the wizard opens automatically in a terminal; noninteractive runs print a setup instruction. Discovery does not call an LLM. Profile extraction and scoring send candidate facts and job text to the configured LLM; setup, `llm-check`, and `doctor --online` send small connection checks. Install and authenticate the CLI you select (OpenCode, Pi, Codex or Claude Code); the script does not install those applications.
 
+## Scheduled runs and alerts
+
+Run `uv run bio-jobs watch` for one pass over all enabled sources. It uses the existing filters and versioned scoring cache, requires a reviewed profile, and alerts only for open, non-rejected jobs at or above `watch.min_score` (default: inherit `analyst.min_score`). Submitted applications do not alert. Existing eligible jobs can alert on the first watch run. Job title, description, requirements, location, compensation, arrangements, deadline and apply-link changes create a new alert version; provenance, posting timestamps, whitespace-only changes and changes to the candidate/scoring configuration alone do not. Returning to a previously alerted content version does not alert again.
+
+Configure the optional `watch` block in `config.yaml`:
+
+```yaml
+watch:
+  min_score: 70       # omit or use null to inherit analyst.min_score
+  notify: true       # macOS desktop notifications; ignored on Linux
+  telegram: false    # optional bot digest, off by default
+  digest_dir: digests # relative to config.yaml, gitignored
+```
+
+Up to three matches produce individual macOS notifications; larger batches produce one summary. Every batch also produces a private Markdown digest in `digests/`. To enable Telegram, set `BIO_TELEGRAM_BOT_TOKEN` and `BIO_TELEGRAM_CHAT_ID` in gitignored `.env` and set `watch.telegram: true`. The bot must have access to the target chat. Only the standard library is used to send plain-text bot messages. Email and n8n hooks are deferred.
+
+SQLite records each job/content version and its digest atomically before delivery. External delivery is attempted at most once: an OS/network error or a crash during delivery can lose that notification, but the local digest remains available and is restored on the next run if its file was not written. External delivery is not retried automatically, avoiding duplicate messages after uncertain outcomes. `stats` and `doctor` show per-source last complete success, retained last error and its time, consecutive failed/partial runs, and last complete snapshot count. Source cooldowns are not failures.
+
+A vacancy closes after its origin is absent from **two complete successful snapshots**; another present origin keeps it open. Errors, rate limits, malformed/partial responses and cooldowns close nothing. Page watchers never expire job lists. Reappearing jobs reopen and reset their absence count. Application records, including submitted records, remain intact. Closed roles leave the scoring, review and auto-apply queues; the SQLite history remains available.
+
+Rerun `./setup.sh` to optionally install or update a macOS LaunchAgent (default **no**). Choose one or two distinct local hours; it uses the repository template `launchd/ru.bio-job-agent.watch.plist`, sets PATH for `~/.local/bin` and `/opt/homebrew/bin`, writes `logs/watch.log`, and does not run at load time. The script prints the exact `launchctl unload` command. Declining leaves an existing schedule unchanged. Linux prints a ready-to-copy cron entry and never modifies crontab; create the indicated logs directory first. The project directory must remain at the installed path.
+
+Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` adds the existing bounded autopilot queue pass; it still requires prior explicit approvals, current materials, active hours, score/limit gates and submission confirmation. Manual and assisted modes only sync, score and alert. Watch does not generate approvals or materials. A database-specific kernel file lock prevents overlapping watch passes, including their auto-apply phase. Process exit/crash releases it automatically; a retained lock file is harmless. SQLite state and the installed schedule survive restarts; the next scheduled or manual run proceeds normally.
+
 ## Terminal workflow
 
 | Command | Behavior |
@@ -37,6 +61,7 @@ uv run bio-jobs review
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
 | `extract-profile [--output path] [--force]` | Extract resume facts into an unreviewed YAML profile; retains title/geography preferences; refuses replacement without `--force` |
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
+| `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
 | `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
@@ -76,9 +101,9 @@ Run `uv run bio-jobs setup` to change models. The shared `analyst:` section is i
 - Profiles are versioned by content hash. Jobs preserve raw content snapshots, exact source IDs, original source/apply URLs, first/last seen times and source-level sync results. Missing dates, salaries, sponsorship and other facts stay null/unknown. Greenhouse `updated_at` is **not** a publication date.
 - Exact source IDs and canonical URLs merge first. Otherwise the same normalized employer/title/location must have description similarity of at least 0.92. Country suffixes and tracking parameters are normalized; functional URL query parameters are preserved. Distinct descriptions are retained. Sources are direct employer ATS feeds or public careers-page watchers. Generic site snapshots are retained for manual review and are not advertised as scientist jobs. Ashby is available as an adapter but excluded from the default watchlist where its robots endpoint blocks access.
 - Current preferences are reapplied when viewing/exporting stored jobs. Widening filters requires a fresh sync to admit previously rejected postings; the persistent cooldown still applies. A source's confirmed excluded update hides its previous accepted listing.
-- A failing source does not stop others or delete old listings. Missing listings are **not** automatically declared closed. Check the last-seen date and employer page. Status rechecks/expiry handling belong to M5.
+- A failing source does not stop others or close old listings. Complete successful ATS snapshots close an origin after two absences; reappearance reopens it. Partial snapshots and page watchers never close listings. Check the last-seen date and employer page when availability is uncertain.
 
-The SQLite schema and transactional, version-tracked SQL migrations are in `migrations/`. Tables cover candidate profiles, cached resume extraction, evaluations, overrides, employers, sources, raw postings, jobs, reviews and sync runs. Documents and application entities remain deferred.
+The SQLite schema and transactional, version-tracked SQL migrations are in `migrations/`. Tables cover candidate profiles, cached resume extraction, evaluations, overrides, employers, sources, raw postings, jobs, reviews, sync runs, application materials/approvals/attempts and content-versioned alerts with durable digests.
 
 ## Export and tests
 
@@ -244,7 +269,7 @@ changes are used. Filled-form and confirmation screenshots are saved under the g
 version IDs, the approved answer-bank snapshot, verification hashes, reasons and confirmation evidence. Screenshots contain personal data; keep
 custom profile/audit locations private and ignored too. On a stop or timeout, the CLI
 disconnects and leaves Chromium open. Close the tab after manual handling. The next attempt
-opens a fresh tab, preserving previous handoffs. Scheduling and notifications are out of scope.
+opens a fresh tab, preserving previous handoffs. Scheduling and notifications are handled by the separate `watch` command described above.
 
 Offline material tests mock the LLM. A real PDF test runs when Chromium is available and
 skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no private data):

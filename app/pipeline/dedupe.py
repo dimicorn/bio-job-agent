@@ -79,7 +79,8 @@ def store_job(conn, job: Posting, source_id: str, employer_id: int, raw_id: int,
         """INSERT INTO job_sources(job_id,source_id,external_id,source_url,apply_url,
         first_seen_at,last_seen_at,raw_posting_id) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(source_id,external_id) DO UPDATE SET source_url=excluded.source_url,
-        apply_url=excluded.apply_url,last_seen_at=excluded.last_seen_at,raw_posting_id=excluded.raw_posting_id,eligible=1""",
+        apply_url=excluded.apply_url,last_seen_at=excluded.last_seen_at,raw_posting_id=excluded.raw_posting_id,eligible=1,missing_count=0,present=1""",
         (job_id, source_id, job.external_id, job.source_url, job.apply_url, now, now, raw_id),
     )
+    conn.execute("UPDATE jobs SET status='open' WHERE id=?", (job_id,))
     return job_id

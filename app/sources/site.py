@@ -109,6 +109,7 @@ class Site(Adapter):
         return self.source.board
 
     def fetch(self):
+        self.complete = True
         html = self.client.get_text(self.endpoint)
         if not self.source.links:
             return structured_jobs(html, self.endpoint) or [snapshot(html, self.endpoint)]
@@ -124,6 +125,7 @@ class Site(Adapter):
                 # Stop the entire source immediately so discovery persists Retry-After.
                 raise
             except Exception as exc:  # noqa: BLE001 - one failed detail page is nonfatal.
+                self.complete = False
                 LOG.warning(
                     "career_page_failed source=%s error=%s", self.source.id, type(exc).__name__
                 )

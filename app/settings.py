@@ -77,6 +77,14 @@ class Apply(BaseModel):
         return self
 
 
+class Watch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    min_score: int | None = Field(default=None, ge=0, le=100)
+    notify: bool = True
+    telegram: bool = False
+    digest_dir: Path = Path("digests")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="BIO_", env_file=ROOT / ".env", extra="ignore")
     database_path: Path = ROOT / "data/jobs.sqlite3"
@@ -91,6 +99,7 @@ class Settings(BaseSettings):
     analyst: Analyst = Field(default_factory=Analyst)
     apply: Apply = Field(default_factory=Apply)
     materials_path: Path = ROOT / "materials"
+    watch: Watch = Field(default_factory=Watch)
 
     def resolved(self, path: Path) -> Path:
         return path if path.is_absolute() else ROOT / path
@@ -108,13 +117,16 @@ class Settings(BaseSettings):
         resume_path = Path(data.get("resume", self.resume_path))
         if not resume_path.is_absolute():
             resume_path = path.parent / resume_path
+        watch = Watch.model_validate(data.get("watch", {}))
+        if not watch.digest_dir.is_absolute():
+            watch.digest_dir = path.parent / watch.digest_dir
         apply = Apply.model_validate(data.get("apply", {}))
         for field in ("answers_file", "profile_dir", "audit_dir"):
             value = getattr(apply, field)
             if not value.is_absolute():
                 setattr(apply, field, path.parent / value)
         return self.model_copy(
-            update={"analyst": analyst, "resume_path": resume_path, "apply": apply}
+            update={"analyst": analyst, "resume_path": resume_path, "apply": apply, "watch": watch}
         )
 
     def secret(self, name: str | None) -> str:

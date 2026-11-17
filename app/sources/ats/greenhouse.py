@@ -12,6 +12,8 @@ class Greenhouse(Adapter):
         payload = self.client.get_json(self.endpoint)
         if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
             raise TypeError("Invalid Greenhouse jobs payload")
+        if (payload.get("meta") or {}).get("total", len(payload["jobs"])) > len(payload["jobs"]):
+            raise ValueError("Incomplete Greenhouse snapshot")
         return payload["jobs"]
 
     def parse(self, raw):

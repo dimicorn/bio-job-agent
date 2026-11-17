@@ -61,3 +61,10 @@ apply:
   submit_wait_minutes: 10             # Assisted: wait for the person and confirmation
   confirmation_timeout_seconds: 45    # Auto: require acknowledgement after one click
   action_seconds: 0.3                 # Pause between field actions
+
+# One pass: uv run bio-jobs watch; scheduling is offered by ./setup.sh (default no).
+watch:
+  min_score: null         # null inherits analyst.min_score
+  notify: true           # macOS notifications; above 3 jobs, send one summary
+  telegram: false        # Optional bot digest; secrets in .env, never in YAML
+  digest_dir: digests     # Relative to config.yaml; gitignored

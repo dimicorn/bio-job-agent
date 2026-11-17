@@ -82,6 +82,7 @@ def discover(
             conn.commit()
             counts = {"fetched": 0, "accepted": 0, "rejected": 0, "malformed": 0}
             error = None
+            seen = set()
             try:
                 if not source.industry_verified:
                     raise ValueError("Employer industry has not been reviewed")
@@ -99,6 +100,7 @@ def discover(
                     job = None
                     try:
                         job = adapter.parse(raw)
+                        seen.add(job.external_id)
                         reason = exclusion(job, source, profile)
                     except (ValueError, KeyError, TypeError, AttributeError) as exc:
                         reason = "malformed"
@@ -132,8 +134,20 @@ def discover(
                     else:
                         store_job(conn, job, source.id, employer_id, raw_id, now)
                         counts["accepted"] += 1
-                status = "partial" if counts["malformed"] else "ok"
-                conn.execute("UPDATE sources SET last_success_at=? WHERE id=?", (now, source.id))
+                status = (
+                    "partial"
+                    if counts["malformed"] or not getattr(adapter, "complete", True)
+                    else "ok"
+                )
+                if status == "ok":
+                    conn.execute(
+                        "UPDATE sources SET last_success_at=?,last_count=?,consecutive_failures=0 WHERE id=?",
+                        (now, counts["fetched"], source.id),
+                    )
+                    if source.adapter != "site":
+                        close_missing(conn, source.id, seen)
+                else:
+                    error = "Incomplete snapshot; no vacancies expired"
             except Exception as exc:  # noqa: BLE001 - isolate arbitrary adapter failures at this boundary.
                 conn.rollback()
                 counts["accepted"] = counts["rejected"] = counts["malformed"] = 0
@@ -151,9 +165,44 @@ def discover(
                 (utcnow(), status, *counts.values(), error, run_id),
             )
             conn.execute(
-                "UPDATE sources SET health=?,last_error=?,last_checked_at=?,next_allowed_at=? WHERE id=?",
-                (status, error, now, next_allowed, source.id),
+                "UPDATE sources SET health=?,last_checked_at=?,next_allowed_at=? WHERE id=?",
+                (status, now, next_allowed, source.id),
             )
+            if error:
+                conn.execute(
+                    "UPDATE sources SET last_error=?,last_error_at=?,consecutive_failures=consecutive_failures+1 WHERE id=?",
+                    (error, now, source.id),
+                )
             conn.commit()
             results.append({"source": source.id, "status": status, **counts, "error": error})
     return results
+
+
+def close_missing(conn, source_id, seen):
+    """Two complete absences retire an origin; another present origin keeps the job open.
+
+    Called inside the source snapshot transaction. Applications are separate and untouched.
+    """
+    for row in conn.execute(
+        "SELECT id,external_id FROM job_sources WHERE source_id=?", (source_id,)
+    ):
+        if row["external_id"] in seen:
+            conn.execute(
+                "UPDATE job_sources SET missing_count=0,present=1 WHERE id=?", (row["id"],)
+            )
+        else:
+            conn.execute(
+                "UPDATE job_sources SET missing_count=missing_count+1,present=CASE WHEN missing_count+1>=2 THEN 0 ELSE present END WHERE id=?",
+                (row["id"],),
+            )
+    conn.execute(
+        """UPDATE jobs SET status='closed' WHERE id IN
+        (SELECT job_id FROM job_sources WHERE source_id=?)
+        AND NOT EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id=jobs.id AND js.present=1)""",
+        (source_id,),
+    )
+    conn.execute(
+        """UPDATE jobs SET status='open' WHERE id IN
+        (SELECT job_id FROM job_sources WHERE source_id=? AND present=1)""",
+        (source_id,),
+    )

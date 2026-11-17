@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -213,6 +214,11 @@ def test_setup_script_is_location_independent_and_rerunnable(tmp_path):
             ["bash", str(script)], cwd=tmp_path, env=env, check=True, capture_output=True
         )
     calls = [json.loads(line) for line in record.read_text().splitlines()]
+    if sys.platform != "darwin":
+        schedule_calls = [call for call in calls if "app.schedule" in call]
+        assert len(schedule_calls) == 2
+        assert all(call[-2:] == ["--hours", "10"] for call in schedule_calls)
+        calls = [call for call in calls if "app.schedule" not in call]
     assert (
         calls
         == [

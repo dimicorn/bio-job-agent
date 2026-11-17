@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by app.schedule from setup.sh; calendar hours are chosen during setup. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>ru.bio-job-agent.watch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__UV__</string><string>run</string>
+        <string>--project</string><string>__DIR__</string>
+        <string>bio-jobs</string><string>watch</string><string>--scheduled</string>
+    </array>
+    <key>WorkingDirectory</key><string>__DIR__</string>
+    <key>StartCalendarInterval</key>
+    <array><dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict></array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key><string>1</string>
+        <key>COLUMNS</key><string>120</string>
+    </dict>
+    <key>StandardOutPath</key><string>__DIR__/logs/watch.log</string>
+    <key>StandardErrorPath</key><string>__DIR__/logs/watch.log</string>
+    <key>RunAtLoad</key><false/>
+</dict>
+</plist>

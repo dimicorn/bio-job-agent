@@ -68,13 +68,18 @@ def run(cfg: Settings, *, online=False) -> int:
 
                 pending = {p.name for p in MIGRATIONS.glob("*.sql")} - applied
                 report("Database", not pending, "Run bio-jobs init" if pending else str(path))
-                for row in conn.execute(
-                    "SELECT id,health,last_checked_at FROM sources ORDER BY id"
-                ):
+                conn.row_factory = sqlite3.Row
+                for row in conn.execute("SELECT * FROM sources ORDER BY id"):
                     report(
                         f"Source {row[0]}",
-                        row[1] in ("ok", "partial"),
-                        f"{row[1]}; checked {row[2] or 'never'}; run bio-jobs sync for a refresh",
+                        row["health"] in ("ok", "partial"),
+                        f"{row['health']}; last success {row['last_success_at'] or 'never'}; "
+                        + (
+                            f"last error {row['last_error_at'] or 'never'}: {row['last_error'] or 'none'}; "
+                            f"consecutive failures {row['consecutive_failures']}; last count {row['last_count']}"
+                            if "consecutive_failures" in set(row.keys())
+                            else "run bio-jobs init for health details"
+                        ),
                     )
         except sqlite3.Error:
             report("Database", False, "Invalid/uninitialised database; run bio-jobs init")
