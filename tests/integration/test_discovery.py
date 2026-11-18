@@ -179,11 +179,13 @@ def test_restricted_access_never_followed(conn, profile, sources, status):
 
     def handler(request):
         calls.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /")
         return httpx.Response(status, headers={"Location": "https://example.com/login"})
 
     result = sync(conn, profile, [sources[0]], httpx.MockTransport(handler))
     assert result[0]["status"] == "error"
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_distinct_roles_do_not_merge(conn, profile, sources):

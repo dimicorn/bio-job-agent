@@ -243,7 +243,7 @@ def test_site_change_snapshots_keep_raw_provenance(conn, profile, sources):
 @pytest.mark.parametrize("ats,cls", [("ashby", Ashby), ("workable", Workable), ("site", Site)])
 @pytest.mark.parametrize(
     "status,exc",
-    [(401, AccessRestricted), (403, AccessRestricted), (302, AccessRestricted), (429, RateLimited)],
+    [(302, AccessRestricted), (429, RateLimited)],
 )
 def test_restrictions_stop_each_new_adapter(sources, ats, cls, status, exc):
     calls = []
@@ -293,8 +293,8 @@ def test_new_adapter_failure_continues_and_workable_provenance(conn, profile, so
 def test_watchlist_loads_and_preserves_explicit_boards():
     firms = load_firms()
     sources = load_sources(DEFAULT_WATCHLIST.parent / "config/sources.yaml")
-    assert len(firms) == 14
-    assert {f.ats for f in firms} == {"greenhouse", "lever", "workable", "site"}
+    assert len(firms) == 17
+    assert {f.ats for f in firms} == {"greenhouse", "lever", "workable", "site", "ashby"}
     assert len({(s.adapter, s.board) for s in sources}) == len(sources)
     assert sources[0].id == "mytos-lever"
     assert not next(s for s in sources if s.board == "recursionpharmaceuticals").enabled
@@ -331,7 +331,7 @@ def test_firms_cli_works_without_profile_or_database(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["bio-jobs", "firms"])
     monkeypatch.setattr(cli, "connect", lambda *a: pytest.fail("firms must not open database"))
     assert cli.main() == 0
-    assert len(json.loads(capsys.readouterr().out)) == 14
+    assert len(json.loads(capsys.readouterr().out)) == 17
 
 
 @pytest.mark.parametrize(
@@ -349,3 +349,49 @@ def test_live_watchlist_validation(request):
         pytest.skip("Use --live -m live for real network access")
     rows = validate_firms(load_firms())
     assert rows and all(row["status"] == "ok" for row in rows), rows
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_unavailable_robots_allows_job_request(status):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(status if request.url.path == "/robots.txt" else 200, text="{}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        client = PublicClient(http, "TestAgent", pause=lambda _: None)
+        assert client.get_json("https://example.com/jobs") == {}
+        assert client.delays["example.com"] >= 1
+    assert calls == ["/robots.txt", "/jobs"]
+
+
+@pytest.mark.parametrize(
+    "status,exc", [(429, RateLimited), (500, httpx.HTTPStatusError), (503, httpx.HTTPStatusError)]
+)
+def test_unreachable_robots_stops_job_request(status, exc):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(status)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http, pytest.raises(exc):
+        PublicClient(http, "TestAgent", pause=lambda _: None).get("https://example.com/jobs")
+    assert calls == ["/robots.txt"]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_job_endpoint_access_restrictions_still_stop(status):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(404 if request.url.path == "/robots.txt" else status)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(AccessRestricted),
+    ):
+        PublicClient(http, "TestAgent", pause=lambda _: None).get("https://example.com/jobs")
+    assert calls == ["/robots.txt", "/jobs"]

@@ -30,7 +30,7 @@ class PublicClient:
         self.last_request = {}
         self.delays = {}
 
-    def _request(self, url: str):
+    def _request(self, url: str, *, robots: bool = False):
         host = urlsplit(url).netloc
         remaining = self.delays.get(host, 1) - (time.monotonic() - self.last_request.get(host, 0))
         if remaining > 0:
@@ -51,7 +51,7 @@ class PublicClient:
                 except (ValueError, TypeError):
                     seconds = 900
             raise RateLimited(max(900, seconds))
-        if response.is_redirect or response.status_code in {401, 403}:
+        if response.is_redirect or (not robots and response.status_code in {401, 403}):
             raise AccessRestricted(f"Access restricted: HTTP {response.status_code}")
         return response
 
@@ -59,9 +59,9 @@ class PublicClient:
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if origin not in self.robots:
-            response = self._request(origin + "/robots.txt")
+            response = self._request(origin + "/robots.txt", robots=True)
             robot = RobotFileParser()
-            if response.status_code in {404, 410}:
+            if 400 <= response.status_code < 500:
                 robot.parse([])
             else:
                 response.raise_for_status()

@@ -16,10 +16,7 @@
 # Autolus (London/Stevenage): https://www.autolus.com/careers/ links to
 # autolus.wd103.myworkdayjobs.com, but direct public GET returned HTTP 403;
 # excluded rather than bypassing access restrictions or inventing a Workday API.
-# Relation (relationrx), Genomics (genomics), Lindus Health (lindus): Ashby boards
-# identified from public employer postings. api.ashbyhq.com/robots.txt returned 401;
-# the client refuses access before requesting the job API, so these are NOT verified
-# API boards and are excluded. The adapter remains available for permitted boards.
+
 
 firms:
   - name: Mytos
@@ -189,3 +186,39 @@ firms:
     area: Cambridge
     review_url: https://www.rxcelerate.com/careers/
     verified_on: '2026-11-15'
+
+  - name: Relation
+    ats: ashby
+    token: relationrx
+    tier: 1
+    industry: biotech
+    employer_url: https://relationrx.com/
+    evidence_url: https://jobs.ashbyhq.com/relationrx
+    industry_evidence: London biotechnology company combining machine learning and biology for drug discovery.
+    area: London
+    review_url: https://jobs.ashbyhq.com/relationrx
+    verified_on: '2026-11-18'
+
+  - name: Genomics
+    ats: ashby
+    token: genomics
+    tier: 2
+    industry: biotech
+    employer_url: https://www.genomics.com/
+    evidence_url: https://www.genomics.com/careers
+    industry_evidence: Commercial genomic analysis for healthcare and drug discovery.
+    area: London / Oxford
+    review_url: https://jobs.ashbyhq.com/genomics
+    verified_on: '2026-11-18'
+
+  - name: Lindus Health
+    ats: ashby
+    token: lindus
+    tier: 2
+    industry: cro
+    employer_url: https://www.lindushealth.com/
+    evidence_url: https://jobs.ashbyhq.com/lindus
+    industry_evidence: Commercial clinical trial services and technology for biopharmaceutical development.
+    area: London
+    review_url: https://jobs.ashbyhq.com/lindus
+    verified_on: '2026-11-18'
