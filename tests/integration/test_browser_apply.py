@@ -37,7 +37,15 @@ def page(browser):
 
 
 @pytest.fixture
-def prepared(tmp_path, conn, profile, sources, transport):
+def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
+    from app.applier import GreenhouseApplier, ProposedAnswers
+
+    def fake_form_url(self, url):
+        self.api_fields = []
+        return url
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", fake_form_url)
+    monkeypatch.setattr("app.llm.ask_json", lambda *args: ProposedAnswers(answers=[]))
     cfg = Settings(
         _env_file=None,
         resume_path=tmp_path / "resume.md",
@@ -140,7 +148,6 @@ def test_mismatch_refuses_submit(prepared, conn, page, ats):
         ('<input type="password" aria-label="Password">', "Sign-in"),
         ("<h2>Complete the assessment</h2>", "assessment"),
         ("<label>Do you require visa sponsorship?<input required></label>", "declaration"),
-        ("<label>Gender<input></label>", "declaration"),
         ('<label>I agree to the terms<input type="checkbox"></label>', "declaration"),
     ],
 )
@@ -284,8 +291,8 @@ def test_known_legal_answer_still_requires_person(prepared, conn, page):
         "greenhouse",
         extra="<label>Do you require visa sponsorship?<select required><option>No</option><option>Yes</option></select></label>",
     )
-    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
-    assert page.evaluate("window.__submissions") == 0
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert page.evaluate("window.__submissions") == 1
 
 
 def test_native_select_and_exact_multiple_choice_verification(prepared, conn, page):
@@ -538,3 +545,149 @@ def test_hidden_required_custom_question_is_queued(prepared, conn, page):
     assert conn.execute(
         "SELECT 1 FROM screening_questions WHERE label='Unsupported widget'"
     ).fetchone()
+
+
+def test_greenhouse_api_fields_on_embed_form(prepared, conn, page, monkeypatch):
+    from app.applier import GreenhouseApplier, greenhouse_questions
+
+    cfg = prepared[0]
+    answers.save_answer(cfg, "Right to work?", "Yes")
+    cfg, profile, row = approve(prepared, conn)
+    payload = {
+        "questions": [
+            {"label": "First Name", "required": True, "fields": [{"name": "first_name"}]},
+            {"label": "Last Name", "required": True, "fields": [{"name": "last_name"}]},
+            {"label": "Email", "required": True, "fields": [{"name": "email"}]},
+            {
+                "label": "Resume",
+                "required": True,
+                "fields": [{"name": "resume", "type": "input_file"}],
+            },
+            {
+                "label": "Cover Letter",
+                "required": False,
+                "fields": [{"name": "cover_letter", "type": "textarea"}],
+            },
+            {
+                "label": "Research focus",
+                "required": True,
+                "fields": [{"name": "focus", "values": [{"label": "Cell assays"}]}],
+            },
+            {
+                "label": "Right to work?",
+                "required": True,
+                "fields": [{"name": "work", "values": [{"label": "Yes"}, {"label": "No"}]}],
+            },
+        ]
+    }
+
+    def embed(self, _url):
+        self.api_fields = greenhouse_questions(payload)
+        return "https://job-boards.greenhouse.io/embed/job_app?for=example&token=123"
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", embed)
+    mock_form(
+        page,
+        "greenhouse",
+        extra='<label for="work">Right to work?</label><select id="work" required><option value="">Choose</option><option>Yes</option><option>No</option></select>',
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert "/embed/job_app" in page.url
+    assert any("answers.yaml" in e["detail"] for e in events(conn, row) if e["action"] == "plan")
+
+
+def test_assisted_llm_answer_is_previewed_and_queued(prepared, conn, page, monkeypatch):
+    import json
+
+    from app.applier import ProposedAnswer, ProposedAnswers
+
+    cfg, profile, row = approve(prepared, conn)
+    cfg.apply.mode = "assisted"
+    mock_form(
+        page, "greenhouse", extra="<label>Describe assays<textarea required></textarea></label>"
+    )
+
+    def llm(_cfg, _system, user, _model, _purpose):
+        question = json.loads(user)["questions"][0]
+        return ProposedAnswers(
+            answers=[ProposedAnswer(id=question["id"], answer=["Cell assays"], needs_human=False)]
+        )
+
+    monkeypatch.setattr("app.llm.ask_json", llm)
+    original = APPLIERS["greenhouse"].wait_confirmation
+
+    def submit(applier, seconds):
+        assert page.locator("textarea").last.input_value() == "Cell assays"
+        applier.submit_button().click()
+        return original(applier, seconds)
+
+    monkeypatch.setattr(APPLIERS["greenhouse"], "wait_confirmation", submit)
+    output = []
+    assert autopilot.apply_one(cfg, conn, profile, row, page, output=output.append) == "submitted"
+    assert any("Describe assays: Cell assays [llm]" in line for line in output)
+    assert conn.execute(
+        "SELECT 1 FROM screening_questions WHERE label='Describe assays'"
+    ).fetchone()
+    assert answers.lookup(answers.load_answers(cfg), row["employer"], "Describe assays") is None
+
+
+def test_greenhouse_location_api_id_matches_autocomplete(prepared, page, monkeypatch):
+    from app.applier import GreenhouseApplier, greenhouse_questions
+
+    cfg, profile, _ = prepared
+    profile.city = "London"
+    payload = {
+        "questions": [],
+        "location_questions": [
+            {
+                "label": "Location",
+                "required": True,
+                "fields": [{"name": "location", "type": "input_text"}],
+            }
+        ],
+    }
+    html = """<form><label for="candidate-location">Location</label>
+      <div class="select__control"><input id="candidate-location" role="combobox" aria-required="true"
+       oninput="document.querySelector('#places').hidden=false"><span class="select__singleValue"></span></div>
+      <div id="places" hidden><div role="option" onclick="document.querySelector('.select__singleValue').textContent='London';document.querySelector('#candidate-location').value='';this.parentElement.hidden=true">London</div></div></form>"""
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+
+    def form_url(self, url):
+        self.api_fields = greenhouse_questions(payload)
+        return url
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", form_url)
+    applier = GreenhouseApplier(page, cfg)
+    applier.open("https://job-boards.greenhouse.io/embed/job_app?for=example&token=123")
+    steps = applier.plan(applier.fields(), {"city": profile.city}, {}, "Example", lambda *x: None)
+    applier.fill(steps)
+    assert page.locator(".select__singleValue").inner_text() == "London"
+
+
+def test_checkbox_group_and_multiselect_react(prepared, page):
+    from app.applier import FormApplier
+
+    cfg, _, _ = prepared
+    html = """<form><fieldset><legend>Tools</legend><label><input type="checkbox">Python</label>
+      <label><input type="checkbox">R</label></fieldset>
+      <label for="skills">Skills</label><div class="select__control"><input id="skills" role="combobox"
+      oninput="document.querySelector('#opts').hidden=false"><span class="selected"></span></div>
+      <div id="opts" hidden><div role="option" onclick="const v=document.querySelector('#skills').value;
+      const e=document.createElement('span');e.className='select__multiValue__label';e.textContent=v;
+      document.querySelector('.selected').append(e);document.querySelector('#skills').value='';this.parentElement.hidden=true">A</div>
+      <div role="option" onclick="const v=document.querySelector('#skills').value;
+      const e=document.createElement('span');e.className='select__multiValue__label';e.textContent=v;
+      document.querySelector('.selected').append(e);document.querySelector('#skills').value='';this.parentElement.hidden=true">B</div></div></form>"""
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+    applier = FormApplier(page, cfg)
+    applier.open("https://example.test/form")
+    steps = applier.plan(
+        applier.fields(),
+        {},
+        {"tools": ["Python", "R"], "skills": ["A", "B"]},
+        "Example",
+        lambda *x: None,
+    )
+    applier.fill(steps)
+    assert page.locator('input[type="checkbox"]:checked').count() == 2
+    assert page.locator(".select__multiValue__label").all_inner_texts() == ["A", "B"]

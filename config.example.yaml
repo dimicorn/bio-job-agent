@@ -54,6 +54,8 @@ search:
   max_posting_age_days: 7
 
 apply:
+  auto_consent: false
+  auto_llm_answers: false
   company_cooldown_days: 30
   mode: manual  # manual | assisted | auto
   daily_limit: 5

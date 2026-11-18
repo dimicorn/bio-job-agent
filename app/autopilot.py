@@ -118,11 +118,15 @@ def values_for(conn, profile, ids):
     )
     names = profile.name.split()
     return {
-        "first_name": names[0] if names else "",
-        "last_name": " ".join(names[1:]),
+        "first_name": profile.first_name or (names[0] if names else ""),
+        "last_name": profile.last_name or " ".join(names[1:]),
         "full_name": profile.name,
-        "email": next(iter(emails)) if len(emails) == 1 else "",
-        "phone": phones[0].strip() if len(phones) == 1 else "",
+        "email": profile.email or (next(iter(emails)) if len(emails) == 1 else ""),
+        "phone": profile.phone or (phones[0].strip() if len(phones) == 1 else ""),
+        "city": profile.city,
+        "linkedin": profile.linkedin,
+        "github": profile.github,
+        "website": profile.website,
         "resume": versions["resume"]["pdf_path"],
         "letter": versions["letter"]["content"],
     }, versions
@@ -181,9 +185,19 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
             bank,
             row["employer"],
             queue,
+            {
+                "resume": versions["resume"]["content"],
+                "facts": [f.model_dump() for f in profile.facts],
+            },
         )
         if not any(s.source == "resume" for s in steps):
             raise FormStop("Resume upload field not found; inspect the form manually")
+        for step in steps:
+            output(
+                f"  {step.field['label']}: {', '.join(step.values) if step.field['kind'] != 'file' else Path(step.values[0]).name} [{step.source}]"
+            )
+            if step.source == "llm":
+                queue(step.field["label"], step.field["options"], step.field["required"])
         applier.fill(steps)
         screenshot(page, cfg, row, attempt, "filled", log)
         # Re-read immediately before handoff/click, after asynchronous file parsing and screenshots.
@@ -236,6 +250,8 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
             screenshot(page, cfg, row, attempt, "confirmation", log)
         except (PlaywrightError, OSError) as exc:
             log("screenshot_failed", stage="confirmation", error=type(exc).__name__)
+        if any(step.source == "llm" for step in steps):
+            output("To save accepted LLM answers, use bio-jobs answers and enter them explicitly.")
         return finish(conn, row, attempt, "submitted", proof)
     except FormStop as exc:
         # Challenges always require a person, including when they appear after Submit.

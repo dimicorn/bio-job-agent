@@ -26,6 +26,14 @@ class Regions(BaseModel):
 class CandidateProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
+    first_name: str = ""
+    last_name: str = ""
+    email: str = ""
+    phone: str = ""
+    city: str = ""
+    linkedin: str = ""
+    github: str = ""
+    website: str = ""
     reviewed: bool = False
     resume_hash: str | None = None
     extraction_version: str | None = None

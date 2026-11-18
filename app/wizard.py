@@ -195,6 +195,13 @@ def setup(cfg: Settings) -> bool:
                 break
             except ValueError:
                 console.print("Use start,end with 0 <= start < end <= 24.")
+        apply.auto_consent = _yes(
+            "Automatically accept eligible single-option consent?", default=apply.auto_consent
+        )
+        apply.auto_llm_answers = _yes(
+            "Allow automatic submission with LLM answers to required free-text questions?",
+            default=apply.auto_llm_answers,
+        )
         document["apply"] = apply.model_dump(mode="json")
         path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         configured = cfg.with_config()
@@ -206,6 +213,22 @@ def setup(cfg: Settings) -> bool:
             shutil.copyfile(ROOT / "config/candidate.example.yaml", candidate)
         save_env(cfg, "BIO_CANDIDATE_PATH", "config/candidate.yaml")
     profile = load_profile(candidate)
+    if _yes("Configure application contact details?", default=False):
+        for field in (
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "city",
+            "linkedin",
+            "github",
+            "website",
+        ):
+            setattr(profile, field, _ask(field.replace("_", " ").title(), getattr(profile, field)))
+        candidate.write_text(
+            yaml.safe_dump(profile.model_dump(), sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
     with connect(cfg.resolved(cfg.database_path)) as conn:
         migrate(conn)
         version = import_profile(conn, profile)
