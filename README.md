@@ -277,3 +277,9 @@ skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no pr
 ```bash
 BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synthetic_letter -m live --live -q -s
 ```
+
+### Fresh postings and employer cooldown
+
+`search.max_posting_age_days` defaults to 7; set it to 0 or null to disable the age filter. Stale roles remain stored but are excluded from scoring, lists, alerts and applications. The list and review show the posting date, or a clearly labelled first-seen proxy only when the source had previously synced successfully. Unknown dates on a first sync remain visible as unknown. Greenhouse uses `first_published`, never `updated_at`; Lever uses `createdAt`.
+
+`apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval remains available during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.

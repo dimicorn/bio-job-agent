@@ -49,7 +49,12 @@ analyst:
 #   api_key_env: DEEPSEEK_API_KEY
 
 # Browser modes require reviewed materials and explicit approval in review.
+search:
+  # Set to 0 or null to disable; unknown first-sync dates remain visible.
+  max_posting_age_days: 7
+
 apply:
+  company_cooldown_days: 30
   mode: manual  # manual | assisted | auto
   daily_limit: 5
   max_per_run: 5

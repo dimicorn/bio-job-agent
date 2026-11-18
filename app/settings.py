@@ -55,9 +55,15 @@ class Analyst(BaseModel):
     output_cost_per_million: float | None = Field(default=None, ge=0)
 
 
+class Search(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_posting_age_days: int | None = Field(default=7, ge=0)
+
+
 class Apply(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["manual", "assisted", "auto"] = "manual"
+    company_cooldown_days: int = Field(default=30, ge=0)
     daily_limit: int = Field(default=5, ge=1, le=1000)
     max_per_run: int = Field(default=5, ge=1, le=1000)
     min_score: int = Field(default=80, ge=0, le=100)
@@ -97,6 +103,7 @@ class Settings(BaseSettings):
     env_path: Path = ROOT / ".env"
     llm_state_dir: Path = ROOT / "data"
     analyst: Analyst = Field(default_factory=Analyst)
+    search: Search = Field(default_factory=Search)
     apply: Apply = Field(default_factory=Apply)
     materials_path: Path = ROOT / "materials"
     watch: Watch = Field(default_factory=Watch)
@@ -126,7 +133,13 @@ class Settings(BaseSettings):
             if not value.is_absolute():
                 setattr(apply, field, path.parent / value)
         return self.model_copy(
-            update={"analyst": analyst, "resume_path": resume_path, "apply": apply, "watch": watch}
+            update={
+                "analyst": analyst,
+                "resume_path": resume_path,
+                "apply": apply,
+                "watch": watch,
+                "search": Search.model_validate(data.get("search", {})),
+            }
         )
 
     def secret(self, name: str | None) -> str:

@@ -1,14 +1,47 @@
 """Approval integrity, execution gates and explicit manual confirmation."""
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
 
 from app import answers, materials
 from app.candidate.profile import import_profile
+from app.pipeline.normalize import key
 from app.resume import digest, require_reviewed
+
+
+def company_cooldown(conn, employer, days, *, now=None):
+    if not days:
+        return None
+    now = now or datetime.now(UTC)
+    dates = []
+    for item in conn.execute("""SELECT e.name, a.state, a.submitted_at, a.updated_at
+        FROM applications a JOIN jobs j ON j.id=a.job_id
+        JOIN employers e ON e.id=j.employer_id
+        WHERE a.state IN ('submitted','submitting','unknown_result')
+        UNION ALL
+        SELECT e.name, 'unknown_result', NULL, t.started_at
+        FROM application_attempts t JOIN jobs j ON j.id=t.job_id
+        JOIN employers e ON e.id=j.employer_id WHERE t.submission_possible=1"""):
+        if key(item["name"]) != key(employer):
+            continue
+        try:
+            date = datetime.fromisoformat(item["submitted_at"] or item["updated_at"])
+            if date.tzinfo is None:
+                date = date.replace(tzinfo=UTC)
+            dates.append(date + timedelta(days=days))
+        except (TypeError, ValueError):
+            continue
+    until = max(dates, default=None)
+    return until if until and until > now else None
+
+
+def check_company(cfg, conn, row, now=None):
+    until = company_cooldown(conn, row["employer"], cfg.apply.company_cooldown_days, now=now)
+    if until:
+        raise ValueError(f"{row['employer']}: company cooldown until {until.date().isoformat()}")
 
 
 def approve(cfg, conn, profile, row, *, approved_this_run=0, now=None):

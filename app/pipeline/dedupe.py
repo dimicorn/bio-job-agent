@@ -77,10 +77,26 @@ def store_job(conn, job: Posting, source_id: str, employer_id: int, raw_id: int,
         conn.execute("UPDATE jobs SET last_verified_at=? WHERE id=?", (now, job_id))
     conn.execute(
         """INSERT INTO job_sources(job_id,source_id,external_id,source_url,apply_url,
-        first_seen_at,last_seen_at,raw_posting_id) VALUES (?,?,?,?,?,?,?,?)
+        first_seen_at,last_seen_at,raw_posting_id,first_seen_reliable) VALUES (?,?,?,?,?,?,?,?,?)
         ON CONFLICT(source_id,external_id) DO UPDATE SET source_url=excluded.source_url,
         apply_url=excluded.apply_url,last_seen_at=excluded.last_seen_at,raw_posting_id=excluded.raw_posting_id,eligible=1,missing_count=0,present=1""",
-        (job_id, source_id, job.external_id, job.source_url, job.apply_url, now, now, raw_id),
+        (
+            job_id,
+            source_id,
+            job.external_id,
+            job.source_url,
+            job.apply_url,
+            now,
+            now,
+            raw_id,
+            int(
+                bool(
+                    conn.execute(
+                        "SELECT last_success_at FROM sources WHERE id=?", (source_id,)
+                    ).fetchone()[0]
+                )
+            ),
+        ),
     )
     conn.execute("UPDATE jobs SET status='open' WHERE id=?", (job_id,))
     return job_id

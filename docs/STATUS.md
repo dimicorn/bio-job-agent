@@ -71,3 +71,5 @@ Fallback for either source: retain cached listings and source error/last-seen in
 - **codex, claude_code, api, command:** backend unit tests are offline and mocked. No live model request was sent through these backends.
 
 Proof and scratch output live outside the repository under the authorised task directory or temporary directories. No populated `.env`, private profile, database, keys or proof logs are committed.
+
+Freshness and company cooldown: scans default to the last 7 days when a posting date or reliable first-seen proxy is available; initial unknown dates remain visible. Application execution observes a configurable 30-day employer cooldown.

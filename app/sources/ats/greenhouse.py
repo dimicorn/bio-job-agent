@@ -19,6 +19,7 @@ class Greenhouse(Adapter):
     def parse(self, raw):
         # updated_at is an edit timestamp, never a posting date.
         return Posting(
+            posted_at=raw.get("first_published"),
             external_id=raw["id"],
             title=text(raw["title"]),
             employer=self.source.employer,

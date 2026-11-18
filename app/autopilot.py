@@ -57,6 +57,7 @@ def reserve(cfg, conn, profile, row, mode, used=0, now=None):
         ).fetchone():
             raise ValueError("A prior attempt may have submitted; never retry automatically")
         applications.check_gates(cfg, conn, row, used=used, now=now)
+        applications.check_company(cfg, conn, row, now=now)
         attempt = conn.execute(
             "INSERT INTO application_attempts(job_id,mode,started_at) VALUES (?,?,?)",
             (row["id"], mode, (now or datetime.now().astimezone()).isoformat()),
@@ -69,11 +70,21 @@ def reserve(cfg, conn, profile, row, mode, used=0, now=None):
     return attempt, bank, ids
 
 
-def arm(conn, row, attempt, mode):
-    # Commit BEFORE handing control to a person or issuing a click. A crash cannot enable a retry.
-    conn.execute("UPDATE application_attempts SET submission_possible=1 WHERE id=?", (attempt,))
+def arm(cfg, conn, row, attempt, mode, now=None):
+    # Serialize the final employer check and submission intent across processes.
     conn.commit()
-    materials.state(conn, row["id"], "submitting")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        applications.check_company(cfg, conn, row, now=now)
+        conn.execute("UPDATE application_attempts SET submission_possible=1 WHERE id=?", (attempt,))
+        conn.execute(
+            "UPDATE applications SET state='submitting', updated_at=? WHERE job_id=?",
+            ((now or datetime.now().astimezone()).isoformat(), row["id"]),
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     event(
         conn, row["id"], attempt, "human_submit_handoff" if mode == "assisted" else "submit_intent"
     )
@@ -191,8 +202,9 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
         if current[0] != "approved":
             raise FormStop("Approval was withdrawn while filling")
         applications.check_gates(cfg, conn, row, used=used, now=now, exclude_attempt=attempt)
+        applications.check_company(cfg, conn, row, now=now)
         button = applier.submit_button()
-        arm(conn, row, attempt, mode)
+        arm(cfg, conn, row, attempt, mode, now)
         possible = True
         if mode == "assisted":
             page.bring_to_front()
@@ -342,8 +354,26 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
     ]
     if job and not selected:
         raise ValueError("Approve the job in review before applying")
+    from app.pipeline.normalize import key
+
+    selected.sort(key=lambda r: r.get("score") if r.get("score") is not None else -1, reverse=True)
     outcomes = []
-    for row in selected[: cfg.apply.max_per_run]:
+    employers = set()
+    for row in selected:
+        if len(outcomes) >= cfg.apply.max_per_run:
+            break
+        employer = key(row["employer"])
+        if employer in employers:
+            continue
+        try:
+            applications.check_company(cfg, conn, row)
+            applications.check_gates(cfg, conn, row, used=len(outcomes))
+        except ValueError as exc:
+            if job:
+                raise
+            output(str(exc))
+            continue
+        employers.add(employer)
         if cfg.apply.mode == "manual":
             import webbrowser
 

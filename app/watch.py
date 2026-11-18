@@ -248,7 +248,9 @@ def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discove
         except RuntimeError as exc:
             scored, scoring_error = 0, str(exc)
             output(scoring_error)
-        ranked = analyst.attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources))
+        ranked = analyst.attach_evaluations(
+            conn, cfg, profile, list_jobs(conn, profile, sources, cfg)
+        )
         notified = queue_alerts(cfg, conn, ranked)
         delivery_errors += deliver_pending(cfg, conn, output)
         if scheduled and cfg.apply.mode == "auto" and not scoring_error:

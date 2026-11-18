@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.models.posting import Posting
 from app.pipeline.normalize import text
 from app.sources.base import Adapter
@@ -39,7 +41,17 @@ class Lever(Adapter):
                 ],
             )
         )
+        try:
+            created = raw.get("createdAt")
+            posted = (
+                datetime.fromtimestamp(int(created) / 1000, UTC).isoformat()
+                if created is not None
+                else None
+            )
+        except (ValueError, TypeError, OverflowError, OSError):
+            posted = None
         return Posting(
+            posted_at=posted,
             external_id=raw["id"],
             title=text(raw["text"]),
             employer=self.source.employer,

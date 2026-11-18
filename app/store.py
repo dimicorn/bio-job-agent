@@ -1,12 +1,22 @@
 import csv
 import io
 import json
+from datetime import UTC, datetime, timedelta
 
+from app.applications import company_cooldown
 from app.models.posting import Posting
 from app.pipeline.filter import exclusion, geography
 
 
-def list_jobs(conn, profile, sources):
+def parse_date(value):
+    try:
+        result = datetime.fromisoformat(value)
+        return result.replace(tzinfo=UTC) if result.tzinfo is None else result.astimezone(UTC)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def list_jobs(conn, profile, sources, cfg=None, now=None):
     current_sources = {s.id: s for s in sources if s.enabled}
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
@@ -33,10 +43,37 @@ def list_jobs(conn, profile, sources):
         ]
         if not eligible:
             continue
+        posted = parse_date(job.posted_at)
+        reliable = [parse_date(x["first_seen_at"]) for x in eligible if x["first_seen_reliable"]]
+        # An initial snapshot cannot establish when an unknown-date job appeared.
+        first_seen = (
+            min((x for x in reliable if x), default=None)
+            if all(x["first_seen_reliable"] for x in origins)
+            else None
+        )
+        date = posted or first_seen
+        days = cfg.search.max_posting_age_days if cfg else 0
+        current = now or datetime.now(UTC)
+        if days and date and date < current.astimezone(UTC) - timedelta(days=days):
+            continue
+        label = (
+            f"posted {job.posted_at}"
+            if posted
+            else f"first seen {first_seen.isoformat()}"
+            if first_seen
+            else "posting date unknown"
+        )
+        cooldown = (
+            company_cooldown(conn, job.employer, cfg.apply.company_cooldown_days, now=current)
+            if cfg
+            else None
+        )
         result.append(
             {
                 "id": row["id"],
                 **job.model_dump(),
+                "date_label": label,
+                "company_cooldown_until": cooldown.isoformat() if cooldown else None,
                 "discovered_at": row["discovered_at"],
                 "last_verified_at": row["last_verified_at"],
                 "status": row["status"],

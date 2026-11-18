@@ -125,8 +125,15 @@ def _list(rows):
             _text(row["title"]),
             _text(row["employer"]),
             _text(row["location"] or "unknown"),
-            _text(f"{(row['posted_at'] or 'unknown')[:10]} / {row['discovered_at'][:10]}"),
-            row["review"] + " / " + (row.get("application_state") or "unprepared"),
+            _text(row.get("date_label", "posting date unknown")),
+            row["review"]
+            + " / "
+            + (row.get("application_state") or "unprepared")
+            + (
+                f"\ncompany cooldown until {row['company_cooldown_until'][:10]}"
+                if row.get("company_cooldown_until")
+                else ""
+            ),
             _text(_score_summary(row)),
             Text("Open", style=f"link {row['apply_url']}"),
         )
@@ -179,6 +186,9 @@ def _review(conn, rows, cfg=None, profile=None):
         console.rule(f"{index}/{len(rows)}")
         console.print(_text(f"{row['title']} — {row['employer']}"))
         console.print(_text(f"{row['location'] or 'unknown'}; discovered {row['discovered_at']}"))
+        console.print(_text(row.get("date_label", "posting date unknown")))
+        if row.get("company_cooldown_until"):
+            console.print(_text(f"company cooldown until {row['company_cooldown_until'][:10]}"))
         console.print(_text(row["description"]))
         console.print(_text(_score_summary(row)))
         if row.get("evaluation"):
@@ -245,6 +255,7 @@ def _review(conn, rows, cfg=None, profile=None):
                                 f"Run bio-jobs apply {row['id']} to fill in {cfg.apply.mode} mode."
                             )
                             continue
+                        applications.check_company(cfg, conn, row)
                         from app.autopilot import event
 
                         event(conn, row["id"], None, "manual_open", url=row["apply_url"])
@@ -547,7 +558,7 @@ def _run(args, cfg):
                 )
         from app.analyst import attach_evaluations
 
-        ranked = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources))
+        ranked = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources, cfg))
         if args.command in ("apply", "autopilot"):
             from app.autopilot import run
 
