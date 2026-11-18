@@ -114,56 +114,27 @@ def unsupported(text, candidate, job=""):
     for token in TECH.findall(text) + DEGREE.findall(text):
         if not re.search(r"(?<!\w)" + re.escape(token) + r"(?!\w)", candidate, re.IGNORECASE):
             issues.append(f"Unverified technology/degree: {token}")
-    # Check individual terms so greetings and line breaks cannot merge known names.
-    common = {
-        "I",
-        "Dear",
-        "My",
-        "The",
-        "In",
-        "As",
-        "With",
-        "Thank",
-        "Sincerely",
-        "Best",
-        "Your",
-        "This",
-        "That",
-        "These",
-        "Those",
-        "It",
-        "A",
-        "An",
-        "For",
-        "At",
-        "Having",
-        "During",
-        "Through",
-        "Please",
-        "Kind",
-        "Regards",
-        "To",
-        "After",
-        "Working",
-        "By",
-        "On",
-        "From",
-        "Our",
-        "We",
-        "You",
-        "Thanks",
-        "Further",
-        "What",
-        "How",
-    }
-    for token in re.findall(r"\b[A-Z][\w+-]*", text):
-        if token not in common and not re.search(
-            r"(?<!\w)" + re.escape(token) + r"(?!\w)", candidate + "\n" + job, re.IGNORECASE
+    # Sentence-initial words are often ordinary prose; retain distinctive acronyms and
+    # terms occurring elsewhere, and check employer phrases separately below.
+    for match in re.finditer(r"\b[A-Z][\w+-]*", text):
+        token = match.group()
+        prefix = text[: match.start()].rstrip()
+        initial = not prefix or prefix[-1] in ".!?\n" or "\n" in text[len(prefix) : match.start()]
+        distinctive = token.isupper() and len(token) > 1 or bool(re.search(r"[\d_+-]", token))
+        greeting = re.search(r"(?:^|[.!?\n])\s*Dear\s+(?:Hiring\s+)?$", text[: match.start()])
+        if (
+            not greeting
+            and (not initial or distinctive)
+            and token != "I"
+            and not re.search(
+                r"(?<!\w)" + re.escape(token) + r"(?!\w)", candidate + "\n" + job, re.IGNORECASE
+            )
         ):
             issues.append(f"Untraced name/term (check employer, technology or degree): {token}")
     for token in re.findall(
         r"\b(?:at|for|from|joined)\s+([A-Z][\w&.-]*(?:\s+[A-Z][\w&.-]*)*)", text
     ):
+        token = token.rstrip(".")
         if token.casefold() not in (candidate + "\n" + job).casefold():
             issues.append(f"Unverified employer/institution: {token}")
     return list(dict.fromkeys(issues))
@@ -174,7 +145,12 @@ def letter_issues(item, profile, row):
     issues = unsupported(
         item.letter,
         candidate,
-        json.dumps({k: row.get(k) for k in ("title", "employer", "description")}),
+        json.dumps(
+            {
+                "job": {k: row.get(k) for k in ("title", "employer", "description")},
+                "preferences": [profile.specialties, profile.target_titles],
+            }
+        ),
     )
     if not item.claims:
         issues.append("No candidate claim provenance supplied")
@@ -377,7 +353,15 @@ def edit_letter(cfg, conn, profile, row):
     warnings = unsupported(
         text,
         resume_text(cfg) + "\n" + "\n".join(f.fact for f in profile.facts),
-        row.get("description", ""),
+        json.dumps(
+            [
+                row.get("title"),
+                row.get("employer"),
+                row.get("description"),
+                profile.specialties,
+                profile.target_titles,
+            ]
+        ),
     )
     return save_version(
         cfg,

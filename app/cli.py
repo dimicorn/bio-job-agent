@@ -217,7 +217,7 @@ def _review(conn, rows, cfg=None, profile=None):
                     )
                 )
         console.print(_text(row["apply_url"]))
-        _show_materials(conn, row)
+        _show_materials(conn, row, profile)
         console.print(
             "o open | s save | r reject | l later | v override | e edit letter | "
             "w rewrite | d diff | a approve/open | t mark submitted | m state | q quit"
@@ -234,18 +234,40 @@ def _review(conn, rows, cfg=None, profile=None):
                         raise ValueError("Preparation requires configured profile")
                     elif action == "e":
                         materials.edit_letter(cfg, conn, profile, row)
-                        _show_materials(conn, row)
+                        _show_materials(conn, row, profile)
                     elif action == "w":
                         instruction = input("Rewrite instruction: ").strip()
                         if instruction:
                             materials.write_letters(
                                 cfg, conn, profile, [row], force=True, instruction=instruction
                             )
-                            _show_materials(conn, row)
+                            _show_materials(conn, row, profile)
                     elif action == "a":
-                        paths = applications.approve(
-                            cfg, conn, profile, row, approved_this_run=approved_this_run
-                        )
+                        try:
+                            paths = applications.approve(
+                                cfg, conn, profile, row, approved_this_run=approved_this_run
+                            )
+                        except applications.UnresolvedWarnings as exc:
+                            for kind, warnings in exc.warnings.items():
+                                console.print(_text(f"{kind} warnings:"))
+                                for warning in warnings:
+                                    console.print(_text(f"  - {warning}"))
+                            if (
+                                input("Type approve to accept these warnings: ").strip().lower()
+                                != "approve"
+                            ):
+                                console.print("Approval cancelled.")
+                                continue
+                            paths = applications.approve(
+                                cfg,
+                                conn,
+                                profile,
+                                row,
+                                approved_this_run=approved_this_run,
+                                acknowledged_warnings=exc.warnings,
+                                expected_ids=exc.ids,
+                                expected_answers_hash=exc.answers_hash,
+                            )
                         approved_this_run += 1
                         console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
                         for path in paths:
@@ -309,7 +331,7 @@ def _review(conn, rows, cfg=None, profile=None):
                 break
 
 
-def _show_materials(conn, row):
+def _show_materials(conn, row, profile=None):
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
     console.print(f"Application: {current[0] if current else 'unprepared'}")
     for kind in ("letter", "resume", "answers"):
@@ -321,7 +343,23 @@ def _show_materials(conn, row):
         )
         if kind == "letter":
             console.print(_text(item["content"]))
-            console.print(_text("Fact provenance: " + item["provenance"]))
+            provenance = json.loads(item["provenance"])
+            if provenance.get("source") == "user edit":
+                console.print("Fact provenance: user-edited letter; verify its claims yourself.")
+            for claim in provenance.get("claims", []):
+                console.print(_text("Claim: " + claim["text"]))
+                if not claim.get("fact_ids"):
+                    console.print("  WARNING: no cited facts")
+                for fact_id in claim.get("fact_ids", []):
+                    if (
+                        profile is None
+                        or not isinstance(fact_id, int)
+                        or not 0 <= fact_id < len(profile.facts)
+                    ):
+                        console.print(_text(f"  WARNING: cited fact {fact_id} no longer exists"))
+                    else:
+                        fact = profile.facts[fact_id]
+                        console.print(_text(f"  Fact: {fact.fact}\n  CV evidence: {fact.evidence}"))
         if item["pdf_path"]:
             console.print(_text(item["pdf_path"]))
         for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):

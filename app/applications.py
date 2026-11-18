@@ -44,25 +44,60 @@ def check_company(cfg, conn, row, now=None):
         raise ValueError(f"{row['employer']}: company cooldown until {until.date().isoformat()}")
 
 
-def approve(cfg, conn, profile, row, *, approved_this_run=0, now=None):
+class UnresolvedWarnings(ValueError):
+    def __init__(self, warnings, ids):
+        self.warnings = warnings
+        self.ids = ids
+        super().__init__("Materials have unresolved warnings")
+
+
+def approve(
+    cfg,
+    conn,
+    profile,
+    row,
+    *,
+    approved_this_run=0,
+    now=None,
+    acknowledged_warnings=None,
+    expected_ids=None,
+    expected_answers_hash=None,
+):
     check_gates(cfg, conn, row, used=approved_this_run, now=now)
-    paths, ids = validate_materials(cfg, conn, profile, row)
     if conn.execute(
         "SELECT 1 FROM application_attempts WHERE job_id=? AND "
         "(submission_possible=1 OR status='started')",
         (row["id"],),
     ).fetchone():
         raise ValueError("A prior attempt may have submitted; reconcile manually, never retry")
+    check_company(cfg, conn, row, now=now)
+    bank = answers.load_answers(cfg)
+    if expected_answers_hash is not None and digest(bank) != expected_answers_hash:
+        raise ValueError("answers.yaml changed during confirmation; review again")
+    try:
+        paths, ids = validate_materials(
+            cfg, conn, profile, row, acknowledged_warnings=acknowledged_warnings
+        )
+    except UnresolvedWarnings as exc:
+        exc.answers_hash = digest(bank)
+        raise
+    if expected_ids is not None and ids != expected_ids:
+        raise ValueError("Materials changed during confirmation; review again")
     conn.execute(
-        """INSERT INTO application_approvals(job_id,material_ids,answers_hash,answers_content) VALUES (?,?,?,?)
+        """INSERT INTO application_approvals(job_id,material_ids,answers_hash,answers_content,acknowledged_warnings) VALUES (?,?,?,?,?)
         ON CONFLICT(job_id) DO UPDATE SET material_ids=excluded.material_ids,
-        answers_hash=excluded.answers_hash,answers_content=excluded.answers_content,approved_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
+        answers_hash=excluded.answers_hash,answers_content=excluded.answers_content,acknowledged_warnings=excluded.acknowledged_warnings,approved_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
         (
             row["id"],
             json.dumps(ids),
-            digest(answers.load_answers(cfg)),
-            json.dumps(answers.load_answers(cfg)),
+            digest(bank),
+            json.dumps(bank),
+            json.dumps(acknowledged_warnings or {}),
         ),
+    )
+    conn.execute(
+        "INSERT INTO application_events(job_id,action,detail) VALUES (?,?,?)",
+        (row["id"], "approval", json.dumps({"acknowledged_warnings": acknowledged_warnings or {}})),
     )
     materials.state(conn, row["id"], "approved")
     row["application_state"] = "approved"
@@ -98,18 +133,18 @@ def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None):
         raise ValueError("apply.daily_limit reached")
 
 
-def validate_materials(cfg, conn, profile, row):
+def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
     require_reviewed(cfg, profile)
     version = import_profile(conn, profile)
-    paths, ids = [], {}
+    paths, ids, warnings = [], {}, {}
     for kind in ("letter", "resume", "answers"):
         current = materials.latest(conn, row["id"], kind)
         if not current:
             raise ValueError(f"Prepare {kind} first")
         if current["profile_version"] != version or current["job_hash"] != materials.job_hash(row):
             raise ValueError(f"{kind} is stale; prepare it again")
-        if json.loads(current["warnings"]):
-            raise ValueError(f"{kind} has unresolved warnings; inspect review and correct it")
+        if found := json.loads(current["warnings"]):
+            warnings[kind] = found
         path = Path(current["path"])
         if not path.exists() or path.read_text(encoding="utf-8") != current["content"]:
             raise ValueError(f"{kind} file changed; import/edit or rebuild it before approval")
@@ -120,12 +155,16 @@ def validate_materials(cfg, conn, profile, row):
                 raise ValueError("Build the resume PDF first")
             if current["pdf_hash"] != digest(Path(current["pdf_path"]).read_bytes().hex()):
                 raise ValueError("Resume PDF changed after ATS check; rebuild it")
-            if current["ats_warnings"] is None or json.loads(current["ats_warnings"]):
-                raise ValueError("Resume PDF has unresolved ATS warnings")
+            if current["ats_warnings"] is None:
+                raise ValueError("Resume PDF has not been ATS checked")
+            if found := json.loads(current["ats_warnings"]):
+                warnings["ATS"] = found
             paths.append(current["pdf_path"])
     current_answers = materials.latest(conn, row["id"], "answers")
     if yaml.safe_load(current_answers["content"]) != {"items": answers.plan(cfg, conn, row)}:
         raise ValueError("Screening answers changed; run answers again")
+    if warnings and warnings != acknowledged_warnings:
+        raise UnresolvedWarnings(warnings, ids)
     return paths, ids
 
 

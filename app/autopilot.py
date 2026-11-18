@@ -28,11 +28,15 @@ def event(conn, job_id, attempt_id, action, **detail):
 
 def reserve(cfg, conn, profile, row, mode, used=0, now=None):
     """Check integrity before locking; atomically recheck eligibility and reserve a slot."""
-    _, ids = applications.validate_materials(cfg, conn, profile, row)
     approved = conn.execute(
         "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
     ).fetchone()
-    if not approved or json.loads(approved["material_ids"]) != ids:
+    if not approved:
+        raise ValueError("Materials changed or approval missing; review and approve again")
+    _, ids = applications.validate_materials(
+        cfg, conn, profile, row, acknowledged_warnings=json.loads(approved["acknowledged_warnings"])
+    )
+    if json.loads(approved["material_ids"]) != ids:
         raise ValueError("Materials changed or approval missing; review and approve again")
     bank = json.loads(approved["answers_content"])
     if approved["answers_hash"] != digest(answers.load_answers(cfg)):
@@ -378,7 +382,22 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
             import webbrowser
 
             applications.check_gates(cfg, conn, row, used=len(outcomes))
-            applications.validate_materials(cfg, conn, profile, row)
+            approved = conn.execute(
+                "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
+            ).fetchone()
+            if not approved:
+                raise ValueError("Approval missing; review and approve again")
+            _, ids = applications.validate_materials(
+                cfg,
+                conn,
+                profile,
+                row,
+                acknowledged_warnings=json.loads(approved["acknowledged_warnings"]),
+            )
+            if ids != json.loads(approved["material_ids"]) or approved["answers_hash"] != digest(
+                answers.load_answers(cfg)
+            ):
+                raise ValueError("Materials or answers changed; review and approve again")
             event(conn, row["id"], None, "manual_open", url=row["apply_url"])
             webbrowser.open(row["apply_url"])
             output(f"{row['id']}: Complete the application yourself; use review → t to confirm.")

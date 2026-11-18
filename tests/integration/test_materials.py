@@ -489,3 +489,88 @@ def test_changed_answers_require_new_draft(preparation, conn, monkeypatch):
     answers.save_answer(cfg, "Salary expectation?", "User-provided salary")
     answers.snapshot(cfg, conn, profile, row)
     assert applications.approve(cfg, conn, profile, row)
+
+
+def test_warning_acknowledgement_is_audited_and_hard_checks_remain(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    ready(cfg, conn, profile, row, monkeypatch)
+    materials.save_version(cfg, conn, profile, row, "letter", "I achieved 999 results.", ["number"])
+    resume = materials.latest(conn, row["id"], "resume")
+    conn.execute(
+        "UPDATE material_versions SET ats_warnings=? WHERE id=?", ('["ATS issue"]', resume["id"])
+    )
+    with pytest.raises(applications.UnresolvedWarnings) as caught:
+        applications.approve(cfg, conn, profile, row)
+    warnings = caught.value.warnings
+    assert warnings == {"letter": ["number"], "ATS": ["ATS issue"]}
+    assert not conn.execute("SELECT 1 FROM application_approvals").fetchone()
+    applications.approve(
+        cfg, conn, profile, row, acknowledged_warnings=warnings, expected_ids=caught.value.ids
+    )
+    approval = conn.execute(
+        "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
+    ).fetchone()
+    assert json.loads(approval["acknowledged_warnings"]) == warnings
+    event = conn.execute("SELECT detail FROM application_events WHERE action='approval'").fetchone()
+    assert json.loads(event[0])["acknowledged_warnings"] == warnings
+    applications.validate_materials(cfg, conn, profile, row, acknowledged_warnings=warnings)
+    Path(resume["pdf_path"]).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="PDF changed"):
+        applications.approve(cfg, conn, profile, row, acknowledged_warnings=warnings)
+
+
+def test_lexical_check_prose_and_fabrications():
+    candidate = "Developed cell assays and led research teams."
+    job = "Principal Scientist at Example Bio"
+    text = (
+        "Dear Hiring Team. Developing robust assays is my focus. "
+        "Scientific collaboration supports my work as Principal Scientist at Example Bio."
+    )
+    assert not materials.unsupported(text, candidate, job)
+    warnings = materials.unsupported(
+        "I worked at InventedLabs for 27 years using CRISPR after earning a PhD.", candidate, job
+    )
+    assert any("InventedLabs" in warning for warning in warnings)
+    assert any("27" in warning for warning in warnings)
+    assert any("CRISPR" in warning for warning in warnings)
+    assert any("PhD" in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("response,approved", [("no", False), ("approve", True)])
+def test_review_warning_confirmation(preparation, conn, monkeypatch, response, approved):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = "auto"
+    ready(cfg, conn, profile, row, monkeypatch)
+    materials.save_version(cfg, conn, profile, row, "letter", "999", ["Unsupported number: 999"])
+    keys = iter("aq")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    monkeypatch.setattr("builtins.input", lambda _: response)
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output))
+    cli._review(conn, [row], cfg, profile)
+    assert "letter warnings:" in output.getvalue()
+    assert bool(conn.execute("SELECT 1 FROM application_approvals").fetchone()) is approved
+
+
+def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    materials.save_version(
+        cfg,
+        conn,
+        profile,
+        row,
+        "letter",
+        "Claim.",
+        provenance={"claims": [{"text": "Claim.", "fact_ids": [0, 999]}]},
+    )
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    cli._show_materials(conn, row, profile)
+    text = output.getvalue()
+    assert "Claim: Claim." in text
+    assert profile.facts[0].fact in text and profile.facts[0].evidence in text
+    assert "cited fact 999 no longer exists" in text

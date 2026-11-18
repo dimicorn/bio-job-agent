@@ -119,7 +119,8 @@ def test_run_picks_best_per_company(conn, monkeypatch):
         {"id": 2, "employer": "Acme", "score": 95, "apply_url": "https://example.com/2"},
     ]
     monkeypatch.setattr(applications, "check_gates", lambda *a, **k: None)
-    monkeypatch.setattr(applications, "validate_materials", lambda *a, **k: None)
+    monkeypatch.setattr(applications, "validate_materials", lambda *a, **k: ([], {}))
+    monkeypatch.setattr(autopilot.answers, "load_answers", lambda *a: {})
     monkeypatch.setattr(autopilot, "event", lambda *a, **k: None)
     opened = []
     monkeypatch.setattr("webbrowser.open", opened.append)
@@ -131,7 +132,11 @@ def test_run_picks_best_per_company(conn, monkeypatch):
             return self
 
         def fetchone(self):
-            return (1,)
+            return {
+                "acknowledged_warnings": "{}",
+                "material_ids": "{}",
+                "answers_hash": autopilot.digest({}),
+            }
 
     assert autopilot.run(cfg, Queue(), None, rows, output=lambda _: None) == ["manual"]
     assert opened == ["https://example.com/2"]

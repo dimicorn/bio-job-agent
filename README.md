@@ -167,7 +167,7 @@ candidate experience. Each candidate claim is checked against its cited facts as
 A failing draft receives one guided rewrite. If it still fails, or the rewrite fails,
 the draft is saved with visible review warnings. These lexical checks are conservative;
 read the letter and its cited facts before approving. They do not prove the meaning of
-a paraphrase. Fix warnings by editing or rewriting the letter.
+a paraphrase. Review each warning and correct or rewrite any unsupported claim. Warnings on your own edits remain visible as advisories.
 
 Every letter, resume and screening draft has a database snapshot and an editable file
 under `materials/<job>/`, linked to the job content and reviewed profile version. PDF
@@ -205,7 +205,7 @@ Additional keys are:
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
 Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
-no material warnings and no unanswered required screening questions. It only marks the
+explicit acknowledgement of any material or ATS warnings. Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Missing or stale materials, changed files or answers, cooldowns, and score and limit gates remain blockers. It only marks the
 job approved; browser execution is a separate `apply` command. Saving a review decision
 also initializes the application state to `saved`. States are `saved`, `preparing`,
 `awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn`, `submitting`,
@@ -282,4 +282,6 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 
 `search.max_posting_age_days` defaults to 7; set it to 0 or null to disable the age filter. Stale roles remain stored but are excluded from scoring, lists, alerts and applications. The list and review show the posting date, or a clearly labelled first-seen proxy only when the source had previously synced successfully. Unknown dates on a first sync remain visible as unknown. Greenhouse uses `first_published`, never `updated_at`; Lever uses `createdAt`.
 
-`apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval remains available during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
+`apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
+
+In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
