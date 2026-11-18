@@ -315,20 +315,25 @@ def test_extract_profile_cli_needs_review_and_protects_existing_output(
     cfg.candidate_path.write_text(yaml.safe_dump(profile.model_dump()))
     cfg.config_path.write_text(yaml.safe_dump({"analyst": cfg.analyst.model_dump()}))
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
-    monkeypatch.setattr(cli, "console", Console(file=io.StringIO()))
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output))
     calls = []
+    unsupported = profile.facts[0].model_copy(update={"evidence": "invented evidence"})
     monkeypatch.setattr(
         resume,
         "ask_json",
         lambda *a: (
             calls.append(a)
-            or resume.ExtractedProfile(facts=profile.facts, specialties=[], uncertainties=[])
+            or resume.ExtractedProfile(
+                facts=[*profile.facts, unsupported], specialties=[], uncertainties=[]
+            )
         ),
     )
     target = tmp_path / "extracted.yaml"
     assert cli.main(["extract-profile", "--output", str(target)]) == 0
     extracted = load_profile(target)
     assert not extracted.reviewed and extracted.resume_hash == profile.resume_hash
+    assert "dropped 1 unsupported facts" in output.getvalue()
     assert cli.main(["extract-profile", "--output", str(target)]) == 1
     assert cli.main(["extract-profile", "--output", str(target), "--force"]) == 0
     assert len(calls) == 1
@@ -378,3 +383,29 @@ def test_live_synthetic_scoring(request, tmp_path):
     assert 0 <= result.score <= 100
     assert result.uncertainty_flags
     print(f"Live scoring backend: {cfg.analyst.backend}; score={result.score}")
+
+
+def test_extract_normalizes_evidence_and_drops_unsupported(matching, conn, monkeypatch):
+    cfg, profile = matching
+    cfg.resume_path.write_text("# Experience\n- Built **“cell culture”**\n  workflows for teams.\n")
+    data = resume.ExtractedProfile.model_validate(
+        {
+            "facts": [
+                {
+                    "category": "technical",
+                    "fact": "Built workflows",
+                    "evidence": 'Built "cell culture" workflows for teams',
+                },
+                {"category": "leadership", "fact": "Won prize", "evidence": "Won a prize"},
+            ],
+            "specialties": [],
+            "uncertainties": [],
+        }
+    )
+    monkeypatch.setattr(resume, "ask_json", lambda *args: data)
+    result = resume.extract_profile(cfg, conn, profile)
+    assert len(result.facts) == 1
+    assert result.facts[0].evidence == "Built **“cell culture”**\n  workflows for teams"
+    assert result.facts[0].evidence in cfg.resume_path.read_text()
+    assert result.uncertainties == ["Dropped unsupported fact: leadership"]
+    assert resume.extract_profile(cfg, conn, profile) == result

@@ -58,6 +58,33 @@ class Answer:
     usage: dict[str, Any] = field(default_factory=dict)
     model: str | None = None
     cost_usd: float | None = None
+    finish_reason: str | None = None
+
+
+class AnswerTerminated(RuntimeError):
+    """A provider ended an answer before it could be used."""
+
+    def __init__(self, message: str, answer: Answer):
+        super().__init__(message)
+        self.answer = answer
+
+
+def _check_finish(
+    answer: Answer, backend: str, cfg: Settings, length: str, stops: tuple[str, ...]
+) -> Answer:
+    reason = answer.finish_reason
+    if reason == length:
+        raise AnswerTerminated(
+            f"{backend} ({cfg.analyst.model or 'default'}): answer cut off at "
+            f"max_tokens={cfg.analyst.max_tokens}; raise analyst.max_tokens or disable thinking (see docs/llm.md)",
+            answer,
+        )
+    if reason and reason not in stops and not answer.text.strip():
+        raise AnswerTerminated(
+            f"{backend} ({cfg.analyst.model or 'default'}): answer terminated without usable content",
+            answer,
+        )
+    return answer
 
 
 def _schema(model: type[BaseModel]) -> dict:
@@ -238,6 +265,9 @@ def ask_backend[T: BaseModel](
         result = _parse(answer.text, model)
         status = "ok"
         return result
+    except AnswerTerminated as exc:
+        answer = exc.answer
+        raise
     finally:
         u = answer.usage
         inp = u.get("input_tokens", 0)
@@ -258,6 +288,7 @@ def ask_backend[T: BaseModel](
             backend=backend,
             model=answer.model,
             status=status,
+            finish_reason=answer.finish_reason,
             input=inp,
             cached=u.get("cached_tokens", 0),
             output=out,
@@ -333,14 +364,16 @@ def run_openai(system: str, user: str, model: type[BaseModel], cfg: Settings) ->
         data = response.json()
         _FORMAT[cache_key] = i
         u = data.get("usage") or {}
-        try:
-            text = data["choices"][0]["message"]["content"]
-            if not isinstance(text, str):
-                raise TypeError
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("OpenAI-compatible API returned no text answer") from exc
-        return Answer(
-            text,
+        choice = (data.get("choices") or [{}])[0]
+        text = (choice.get("message") or {}).get("content")
+        reason = choice.get("finish_reason")
+        reason = (
+            reason
+            if reason in ("stop", "length", "content_filter", "tool_calls", "function_call")
+            else ("other" if reason else None)
+        )
+        answer = Answer(
+            text if isinstance(text, str) else "",
             {
                 "input_tokens": u.get("prompt_tokens", 0),
                 "output_tokens": u.get("completion_tokens", 0),
@@ -352,7 +385,12 @@ def run_openai(system: str, user: str, model: type[BaseModel], cfg: Settings) ->
             else {},
             data.get("model", a.model),
             u.get("cost"),
+            reason,
         )
+        _check_finish(answer, "openai", cfg, "length", ("stop",))
+        if not isinstance(text, str):
+            raise RuntimeError("OpenAI-compatible API returned no text answer")  # noqa: TRY004
+        return answer
     raise RuntimeError("Server rejected all structured response formats")
 
 
@@ -385,22 +423,38 @@ def run_api(system: str, user: str, model: type[BaseModel], cfg: Settings) -> An
     _http_error(response)
     data = response.json()
     u = data.get("usage") or {}
-    for block in data.get("content", []):
-        if block.get("type") == "tool_use" and block.get("name") == "structured_answer":
-            return Answer(
-                json.dumps(block["input"]),
-                {
-                    "input_tokens": u.get("input_tokens", 0)
-                    + u.get("cache_read_input_tokens", 0)
-                    + u.get("cache_creation_input_tokens", 0),
-                    "cached_tokens": u.get("cache_read_input_tokens", 0),
-                    "output_tokens": u.get("output_tokens", 0),
-                }
-                if u
-                else {},
-                data.get("model", a.model),
-            )
-    raise RuntimeError("Claude API returned no structured answer")
+    text = next(
+        (
+            json.dumps(block["input"])
+            for block in data.get("content", [])
+            if block.get("type") == "tool_use" and block.get("name") == "structured_answer"
+        ),
+        "",
+    )
+    reason = data.get("stop_reason")
+    reason = (
+        reason
+        if reason in ("end_turn", "tool_use", "max_tokens", "stop_sequence", "refusal")
+        else ("other" if reason else None)
+    )
+    answer = Answer(
+        text,
+        {
+            "input_tokens": u.get("input_tokens", 0)
+            + u.get("cache_read_input_tokens", 0)
+            + u.get("cache_creation_input_tokens", 0),
+            "cached_tokens": u.get("cache_read_input_tokens", 0),
+            "output_tokens": u.get("output_tokens", 0),
+        }
+        if u
+        else {},
+        data.get("model", a.model),
+        finish_reason=reason,
+    )
+    _check_finish(answer, "api", cfg, "max_tokens", ("end_turn", "tool_use", "stop_sequence"))
+    if not text:
+        raise RuntimeError("Claude API returned no structured answer")
+    return answer
 
 
 def _run(
@@ -628,7 +682,13 @@ def run_cli(backend: str, system: str, user: str, model: type[BaseModel], cfg: S
                 if "structured_output" in data
                 else data.get("result", "")
             )
-            return Answer(
+            reason = data.get("stop_reason")
+            reason = (
+                reason
+                if reason in ("end_turn", "tool_use", "max_tokens", "stop_sequence")
+                else ("other" if reason else None)
+            )
+            answer = Answer(
                 text,
                 {
                     "input_tokens": u.get("input_tokens", 0)
@@ -641,6 +701,10 @@ def run_cli(backend: str, system: str, user: str, model: type[BaseModel], cfg: S
                 else {},
                 a.model,
                 data.get("total_cost_usd"),
+                reason,
+            )
+            return _check_finish(
+                answer, backend, cfg, "max_tokens", ("end_turn", "tool_use", "stop_sequence")
             )
         if backend == "opencode":
             text = "".join(

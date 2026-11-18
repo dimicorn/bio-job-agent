@@ -2,13 +2,16 @@
 
 import hashlib
 import json
+import re
+import string
 
 from pydantic import BaseModel, ConfigDict
 
 from app.candidate.profile import CandidateProfile, Fact
 from app.llm import ask_json
 
-EXTRACTION_VERSION = "resume-v1"
+EXTRACTION_VERSION = "resume-v2"
+DROPPED_PREFIX = "Dropped unsupported fact: "
 
 
 def digest(value) -> str:
@@ -29,6 +32,40 @@ class ExtractedProfile(BaseModel):
     facts: list[Fact]
     specialties: list[str]
     uncertainties: list[str]
+
+
+def _normalized_with_positions(text: str) -> tuple[str, list[int]]:
+    # Remove only Markdown formatting, retaining a source index for every character.
+    markers = set()
+    for match in re.finditer(r"(?m)^[ \t]*(?:#{1,6}[ \t]+|[-+*][ \t]+|\d+[.)][ \t]+)", text):
+        markers.update(range(match.start(), match.end()))
+    chars, positions = [], []
+    translations = str.maketrans(
+        {"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-", "−": "-", "‑": "-"}
+    )
+    for i, char in enumerate(text):
+        if i in markers or char in "*_`":
+            continue
+        char = char.translate(translations)
+        if char.isspace():
+            if not chars or chars[-1] == " ":
+                continue
+            char = " "
+        chars.append(char)
+        positions.append(i)
+    return "".join(chars), positions
+
+
+def _evidence_span(text: str, evidence: str) -> str | None:
+    normalized, positions = _normalized_with_positions(text)
+    needle, _ = _normalized_with_positions(evidence)
+    needle = needle.strip().rstrip(string.punctuation + "…").rstrip()
+    if not needle:
+        return None
+    start = normalized.find(needle)
+    if start < 0:
+        return None
+    return text[positions[start] : positions[start + len(needle) - 1] + 1]
 
 
 def extract_profile(cfg, conn, base: CandidateProfile) -> CandidateProfile:
@@ -52,8 +89,19 @@ def extract_profile(cfg, conn, base: CandidateProfile) -> CandidateProfile:
             ExtractedProfile,
             "profile",
         )
-        if any(f.evidence not in text for f in extracted.facts):
-            raise ValueError("Extracted fact evidence must be a verbatim resume excerpt")
+        kept = []
+        extracted.uncertainties = [
+            u for u in extracted.uncertainties if not u.startswith(DROPPED_PREFIX)
+        ]
+        for fact in extracted.facts:
+            span = _evidence_span(text, fact.evidence)
+            if span is None:
+                extracted.uncertainties.append(DROPPED_PREFIX + fact.category)
+            else:
+                kept.append(fact.model_copy(update={"evidence": span}))
+        if not kept:
+            raise ValueError("No facts have a matching verbatim resume excerpt")
+        extracted.facts = kept
         conn.execute(
             "INSERT OR IGNORE INTO profile_extractions(content_hash,payload) VALUES (?,?)",
             (key, extracted.model_dump_json()),

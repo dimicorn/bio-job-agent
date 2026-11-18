@@ -465,7 +465,7 @@ def _run(args, cfg):
             )
             return 0
         if args.command == "extract-profile":
-            from app.resume import extract_profile
+            from app.resume import DROPPED_PREFIX, extract_profile
 
             target = args.output or cfg.resolved(cfg.candidate_path)
             if target == ROOT / "config/candidate.example.yaml":
@@ -476,7 +476,10 @@ def _run(args, cfg):
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w" if args.force else "x", encoding="utf-8") as output:
                 yaml.safe_dump(extracted.model_dump(), output, sort_keys=False)
-            console.print(f"Extracted unreviewed profile: {target}")
+            dropped = sum(u.startswith(DROPPED_PREFIX) for u in extracted.uncertainties)
+            console.print(
+                f"Extracted unreviewed profile: {target}; dropped {dropped} unsupported facts."
+            )
             console.print(
                 "Review every fact, correct errors, then set reviewed: true. "
                 "Set BIO_CANDIDATE_PATH to this file in .env."

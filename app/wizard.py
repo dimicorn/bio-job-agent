@@ -97,6 +97,8 @@ def _choose(cfg: Settings, index: int | None = None) -> Analyst:
             "api_key_env": name,
             "model": _ask("Model ID", default_model),
         }
+        if i == 0:
+            values["openai_extra"] = {"thinking": {"type": "disabled"}}
     elif i in (3, 4):
         backend = "opencode" if i == 3 else "pi"
         console.print("Use model IDs from `opencode models` or `pi --list-models`.")

@@ -251,7 +251,12 @@ def analyze_new(cfg, conn, profile, sources):
             try:
                 results = future.result()
             except Exception as exc:  # noqa: BLE001 - isolate provider failures per batch
-                errors.append(type(exc).__name__)
+                from app.llm import AnswerTerminated
+
+                batch = futures[future]
+                ids = ", ".join(str(row["id"]) for row, _ in batch)
+                detail = str(exc) if isinstance(exc, AnswerTerminated) else type(exc).__name__
+                errors.append(f"jobs {ids}: {detail}")
                 continue
             for row, key in futures[future]:
                 conn.execute(

@@ -12,7 +12,7 @@ Run `./setup.sh` once, or `uv run bio-jobs setup` to change settings. The wizard
 | `pi` | Installed Pi, `provider`, `model`; credentials through its auth or `.env` |
 | `command` | `command`: prompt on stdin, one JSON object on stdout; no shell expansion |
 
-Discovery and terminal review do not call the LLM. `extract-profile` extracts resume facts for mandatory factual review; `analyze` scores stored eligible jobs and `scan` syncs then scores. These commands send candidate data to the configured backend. Document drafts remain deferred. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` groups usage and known costs by backend, model and purpose, including scoring.
+Discovery and terminal review do not call the LLM. `extract-profile` extracts resume facts for mandatory factual review; formatting differences in supporting excerpts are normalized, unsupported facts are dropped and counted, and saved evidence comes from the resume; `analyze` scores stored eligible jobs and `scan` syncs then scores. These commands send candidate data to the configured backend. Document drafts remain deferred. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` groups usage and known costs by backend, model and purpose, including scoring.
 
 ## DeepSeek: direct API
 
@@ -24,9 +24,9 @@ analyst:
   api_key_env: DEEPSEEK_API_KEY
 ```
 
-The [official DeepSeek API guide](https://api-docs.deepseek.com/) documents OpenAI-compatible requests and the current `deepseek-flash` model alias. Enter your key in the wizard or add `DEEPSEEK_API_KEY=...` to `.env`; never put a key in YAML. This machine has no DeepSeek key, so **direct DeepSeek live use is unverified**. Its transport and schema negotiation are tested offline.
+The [official DeepSeek API guide](https://api-docs.deepseek.com/) documents OpenAI-compatible requests and the current `deepseek-flash` model alias. Enter your key in the wizard or add `DEEPSEEK_API_KEY=...` to `.env`; never put a key in YAML. Direct DeepSeek flash and pro extraction have been live-verified using synthetic CV data. The setup preset disables thinking with `openai_extra: {thinking: {type: disabled}}`; DeepSeek enables thinking by default, and reasoning consumes the same output token budget as the answer. Re-enable it explicitly if desired, allowing for greater cost and latency.
 
-Other OpenAI-compatible services use the same fields. For a keyless local endpoint, use e.g. `base_url: http://localhost:11434/v1`, the installed model ID and `api_key_env: null`. Optional request fields such as temperature go in `openai_extra`; the adapter owns model/messages/response format. API output budgets use `max_tokens` (default 12000 for detailed scoring batches), and each request has a configurable `timeout` (default 120 seconds). Reduce `batch_size` or raise the budget if a provider truncates scoring responses.
+Other OpenAI-compatible services use the same fields. For a keyless local endpoint, use e.g. `base_url: http://localhost:11434/v1`, the installed model ID and `api_key_env: null`. Optional request fields such as temperature go in `openai_extra`; the adapter owns model/messages/response format. API output budgets use `max_tokens` (default 12000 for detailed scoring batches), and each request has a configurable `timeout` (default 120 seconds). If an answer is cut off, the error identifies the backend, model and `max_tokens`; raise `analyst.max_tokens`, disable thinking, or reduce scoring `batch_size`. A larger budget can increase cost and latency. Failed scoring batches remain unscored.
 
 ## DeepSeek through OpenCode
 
@@ -87,4 +87,4 @@ Each backend attempt writes a `llm` event to `data/llm-usage.jsonl` with purpose
 
 ## Verification
 
-Offline tests mock HTTP and subprocesses for all seven backends, strict-schema downgrade, response validation, CLI errors/isolation and failover across launches. Default pytest blocks network; all live checks are explicit. Direct DeepSeek and Pi live use remain unverified without a key. The permitted OpenCode free DeepSeek smoke reached the provider but returned HTTP 429 (`provider.free-limit`, free usage exhausted); no successful live model response was obtained. An initial configuration bootstrap failure reached no model and was fixed by inheriting the inline config into the private server. See [STATUS.md](STATUS.md) for validation totals.
+Offline tests mock HTTP and subprocesses for all seven backends, strict-schema downgrade, response validation, CLI errors/isolation and failover across launches. Default pytest blocks network; all live checks are explicit. Direct DeepSeek was live-verified with synthetic data; DeepSeek through Pi remains unverified. The permitted OpenCode free DeepSeek smoke reached the provider but returned HTTP 429 (`provider.free-limit`, free usage exhausted); no successful live model response was obtained. An initial configuration bootstrap failure reached no model and was fixed by inheriting the inline config into the private server. See [STATUS.md](STATUS.md) for validation totals.

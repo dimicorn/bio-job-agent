@@ -192,6 +192,7 @@ def test_wizard_saves_api_keys_and_fallback(configured, monkeypatch):
     assert wizard.setup(cfg)
     assert checks == [("openai", "deepseek-flash"), ("pi", "my-pi-model")]
     document = yaml.safe_load(cfg.config_path.read_text())
+    assert document["analyst"]["openai_extra"] == {"thinking": {"type": "disabled"}}
     assert document["analyst"]["fallback_backend"] == "pi"
     assert document["apply"]["mode"] == "assisted"
     assert document["apply"]["daily_limit"] == 7
@@ -282,3 +283,17 @@ def test_firms_validation_dispatch_needs_no_llm_or_database(configured, monkeypa
     assert cli.main(["firms", "--validate"]) == 1
     assert calls == [True]
     assert not cfg.database_path.exists()
+
+
+def test_deepseek_preset_and_doctor_warning(configured, monkeypatch):
+    cfg, output = configured
+    monkeypatch.setattr(wizard, "_key", lambda *args: None)
+    monkeypatch.setattr(wizard, "_ask", lambda prompt, default="": default)
+    selected = wizard._choose(cfg, 0)
+    assert selected.model_dump()["openai_extra"] == {"thinking": {"type": "disabled"}}
+    document = yaml.safe_load(cfg.config_path.read_text())
+    document["analyst"] = selected.model_dump()
+    document["analyst"]["openai_extra"] = {}
+    cfg.config_path.write_text(yaml.safe_dump(document))
+    doctor.run(cfg)
+    assert "thinking" in output.getvalue() and "disabled" in output.getvalue()

@@ -95,6 +95,19 @@ def run(cfg: Settings, *, online=False) -> int:
         for label, selected in choices:
             a = selected.analyst
             ok = True
+            thinking = a.openai_extra.get("thinking")
+            if (
+                a.backend == "openai"
+                and "deepseek" in (a.base_url or "").lower()
+                and (not isinstance(thinking, dict) or thinking.get("type") != "disabled")
+            ):
+                rows.append(
+                    (
+                        f"{label} thinking",
+                        "WARN",
+                        "Set analyst.openai_extra: {thinking: {type: disabled}}",
+                    )
+                )
             if a.backend in ("openai", "api"):
                 name = a.api_key_env or ("ANTHROPIC_API_KEY" if a.backend == "api" else None)
                 ok = (

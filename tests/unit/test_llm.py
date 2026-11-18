@@ -421,3 +421,71 @@ def test_missing_usage_never_becomes_a_zero_cost_estimate(cfg, monkeypatch):
     assert llm.ask_json(cfg, "s", "u", Ping).ok
     event = json.loads((cfg.llm_state_dir / "llm-usage.jsonl").read_text())
     assert event["cost_usd"] is None and not event["usage_available"]
+
+
+@pytest.mark.parametrize("content", ["", '{"ok":', '{"ok":true}'])
+def test_openai_length_preserves_usage_and_reports_cutoff(cfg, monkeypatch, content):
+    monkeypatch.setattr(
+        llm.httpx,
+        "post",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "length", "message": {"content": content}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 12000},
+            },
+        ),
+    )
+    with pytest.raises(
+        llm.AnswerTerminated, match=r"openai \(tiny\): answer cut off at max_tokens=12000"
+    ):
+        llm.ask_json(cfg, "private prompt", "private CV", Ping, "profile")
+    event = json.loads((cfg.llm_state_dir / "llm-usage.jsonl").read_text())
+    assert (event["status"], event["finish_reason"], event["input"], event["output"]) == (
+        "error",
+        "length",
+        12,
+        12000,
+    )
+    assert "private" not in json.dumps(event)
+
+
+def test_openai_stop_and_other_empty_finish(cfg, monkeypatch):
+    def respond(reason, content):
+        monkeypatch.setattr(
+            llm.httpx,
+            "post",
+            lambda *a, **k: httpx.Response(
+                200,
+                json={
+                    "choices": [{"finish_reason": reason, "message": {"content": content}}],
+                },
+            ),
+        )
+
+    respond("stop", '{"ok":true}')
+    assert llm.ask_json(cfg, "s", "u", Ping).ok
+    respond("content_filter", None)
+    with pytest.raises(llm.AnswerTerminated, match="terminated without usable content"):
+        llm.ask_json(cfg, "s", "u", Ping)
+
+
+def test_api_max_tokens_preserves_usage(cfg, monkeypatch):
+    cfg.analyst = Analyst(backend="api", model="claude-test")
+    cfg.env_path.write_text("ANTHROPIC_API_KEY=test-only\n")
+    monkeypatch.setattr(
+        llm.httpx,
+        "post",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={
+                "stop_reason": "max_tokens",
+                "content": [],
+                "usage": {"output_tokens": 100},
+            },
+        ),
+    )
+    with pytest.raises(llm.AnswerTerminated, match="answer cut off"):
+        llm.ask_json(cfg, "s", "u", Ping)
+    event = json.loads((cfg.llm_state_dir / "llm-usage.jsonl").read_text())
+    assert event["finish_reason"] == "max_tokens" and event["output"] == 100
