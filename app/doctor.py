@@ -36,17 +36,25 @@ def run(cfg: Settings, *, online=False) -> int:
         report("LLM config", False, "Run uv run bio-jobs setup")
     try:
         profile = load_profile(cfg.resolved(cfg.candidate_path))
-        report(
-            "Profile", True, f"reviewed={profile.reviewed}; edit {cfg.resolved(cfg.candidate_path)}"
+        rows.append(
+            (
+                "Profile",
+                "OK" if profile.reviewed else "WARN",
+                f"reviewed={profile.reviewed}; review {cfg.resolved(cfg.candidate_path)} and set reviewed: true",
+            )
         )
     except (ValueError, OSError, yaml.YAMLError):
         report("Profile", False, "Run bio-jobs setup or bio-jobs import-profile <path>")
     try:
         sources = load_sources(cfg.resolved(cfg.sources_path))
         enabled = [s for s in sources if s.enabled]
-        report("Sources", bool(enabled), f"{len(enabled)} enabled; edit config/sources.yaml")
+        report(
+            "Sources",
+            bool(enabled),
+            f"{len(enabled)} enabled; edit {cfg.resolved(cfg.sources_path)}",
+        )
     except (ValueError, OSError, yaml.YAMLError):
-        report("Sources", False, "Fix BIO_SOURCES_PATH / config/sources.yaml")
+        report("Sources", False, f"Fix sources at {cfg.resolved(cfg.sources_path)}")
     from app.materials import browser_available
 
     report("Chromium", browser_available(), "PDF rendering: uv run playwright install chromium")

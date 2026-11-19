@@ -26,7 +26,9 @@ def event(conn, job_id, attempt_id, action, **detail):
     conn.commit()
 
 
-def reserve(cfg, conn, profile, row, mode, used=0, now=None):
+def reserve(cfg, conn, profile, row, mode, used=0, now=None, *, unattended=None):
+    if unattended is None:
+        unattended = mode == "auto"
     """Check integrity before locking; atomically recheck eligibility and reserve a slot."""
     approved = conn.execute(
         "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
@@ -60,7 +62,7 @@ def reserve(cfg, conn, profile, row, mode, used=0, now=None):
             (row["id"],),
         ).fetchone():
             raise ValueError("A prior attempt may have submitted; never retry automatically")
-        applications.check_gates(cfg, conn, row, used=used, now=now)
+        applications.check_gates(cfg, conn, row, used=used, now=now, unattended=unattended)
         applications.check_company(cfg, conn, row, now=now)
         attempt = conn.execute(
             "INSERT INTO application_attempts(job_id,mode,started_at) VALUES (?,?,?)",
@@ -138,11 +140,13 @@ def screenshot(page, cfg, row, attempt, name, log):
     return path
 
 
-def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
+def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, unattended=None):
     mode = cfg.apply.mode
     if mode not in ("assisted", "auto"):
         raise ValueError("Browser application requires assisted or auto mode")
-    attempt, bank, ids = reserve(cfg, conn, profile, row, mode, used, now)
+    if unattended is None:
+        unattended = mode == "auto"
+    attempt, bank, ids = reserve(cfg, conn, profile, row, mode, used, now, unattended=unattended)
     log = lambda action, **detail: event(conn, row["id"], attempt, action, **detail)
     possible = False
     page_factory = page if callable(page) else None
@@ -194,7 +198,9 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
                 latest["id"] != version["id"]
                 or Path(version["path"]).read_text() != version["content"]
             ):
-                raise FormStop("Approved material changed while filling; review again")
+                raise FormStop(
+                    f"{kind} file changed while filling; run bio-jobs import {row['id']} --kind {kind} and review again"
+                )
         cv = versions["resume"]
         if digest(Path(cv["pdf_path"]).read_bytes().hex()) != cv["pdf_hash"]:
             raise FormStop("Approved resume PDF changed while filling")
@@ -205,7 +211,9 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
         ).fetchone()
         if current[0] != "approved":
             raise FormStop("Approval was withdrawn while filling")
-        applications.check_gates(cfg, conn, row, used=used, now=now, exclude_attempt=attempt)
+        applications.check_gates(
+            cfg, conn, row, used=used, now=now, exclude_attempt=attempt, unattended=unattended
+        )
         applications.check_company(cfg, conn, row, now=now)
         button = applier.submit_button()
         arm(cfg, conn, row, attempt, mode, now)
@@ -344,7 +352,9 @@ class Browser:
             self.pw = self.browser = self.lock = None
 
 
-def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Browser):
+def run(
+    cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Browser, unattended=False
+):
     """Only the approved queue is consumed; discovery/preparation never imply approval."""
     if job and not any(r["id"] == job for r in rows):
         raise ValueError("Unknown or ineligible job ID")
@@ -356,6 +366,12 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
             "SELECT 1 FROM applications WHERE job_id=? AND state='approved'", (r["id"],)
         ).fetchone()
     ]
+    if job:
+        row = next(r for r in rows if r["id"] == job)
+        if row.get("score") is None or row["score"] < max(
+            cfg.apply.min_score, cfg.analyst.min_score
+        ):
+            raise ValueError(applications.score_gate_message(cfg, row, apply=True))
     if job and not selected:
         raise ValueError("Approve the job in review before applying")
     from app.pipeline.normalize import key
@@ -370,8 +386,10 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
         if employer in employers:
             continue
         try:
+            if row.get("status", "open") != "open":
+                raise ValueError(f"Job {row['id']} is closed; verify it manually before applying")
             applications.check_company(cfg, conn, row)
-            applications.check_gates(cfg, conn, row, used=len(outcomes))
+            applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
         except ValueError as exc:
             if job:
                 raise
@@ -381,7 +399,7 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
         if cfg.apply.mode == "manual":
             import webbrowser
 
-            applications.check_gates(cfg, conn, row, used=len(outcomes))
+            applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
             approved = conn.execute(
                 "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
             ).fetchone()
@@ -407,7 +425,14 @@ def run(cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Bro
         status = None
         try:
             status = apply_one(
-                cfg, conn, profile, row, browser.page, used=len(outcomes), output=output
+                cfg,
+                conn,
+                profile,
+                row,
+                browser.page,
+                used=len(outcomes),
+                output=output,
+                unattended=unattended,
             )
             outcomes.append(status)
         except ValueError as exc:

@@ -72,7 +72,7 @@ Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` a
 | `llm-check` | One tiny schema-validated request with configured failover |
 | `init` / `import-profile [path]` | Initialise/migrate SQLite or version a candidate profile |
 
-`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--since YYYY-MM-DD`, `--status`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs leave the default review queue; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
+`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--since YYYY-MM-DD`, `--status`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs and applications in progress remain in the default review queue, even when unscored; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
 
 Scores use configurable weights: specialization 30, technical 20, seniority/leadership 15, industry/therapeutic area 10, geography 10, research outcomes 10, salary/arrangements 5. Weights must sum to 100. The LLM supplies dimension ratings with evidence; the application computes the total (nearest integer, halves up). An unknown dimension contributes neutral 50 and always carries an uncertainty flag. Missing qualifications mean an **unknown** must-have, never an unmet requirement; unmet requires explicit candidate evidence. Recommendations follow score bands: apply ≥70, maybe ≥50, skip <50. Confidence remains separate from score; even a high score can need factual checks. Model judgments still require human review.
 
@@ -200,7 +200,7 @@ Additional keys are:
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |
-| `a` | Approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted/auto prints the `apply` command. |
+| `a` | Approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
 | `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
@@ -237,7 +237,7 @@ uv run bio-jobs autopilot          # auto mode: sync/score, then consume approve
 uv run bio-jobs run --no-scan       # alias; use stored approved queue only
 ```
 
-`manual` opens the link for completion yourself. `assisted` fills and verifies the form,
+`active_hours` restricts unattended auto application; manual and assisted actions are available at any hour. `manual` opens the link for completion yourself. `assisted` fills and verifies the form,
 then waits up to `submit_wait_minutes` for you to press Submit and for an acknowledgement.
 `auto` presses Submit once, then waits up to `confirmation_timeout_seconds` for an
 acknowledgement. Both browser modes support Greenhouse (including embedded forms), Lever,
@@ -280,8 +280,10 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 
 ### Fresh postings and employer cooldown
 
-`search.max_posting_age_days` defaults to 7; set it to 0 or null to disable the age filter. Stale roles remain stored but are excluded from scoring, lists, alerts and applications. The list and review show the posting date, or a clearly labelled first-seen proxy only when the source had previously synced successfully. Unknown dates on a first sync remain visible as unknown. Greenhouse uses `first_published`, never `updated_at`; Lever uses `createdAt`.
+`search.max_posting_age_days` defaults to 7; set it to 0 or null to disable the age filter. Freshness limits scoring and alerts for new prospects. Saved jobs and applications remain visible in list and review with a stale or closed label; closed jobs cannot be applied automatically. The list and review show the posting date, or a clearly labelled first-seen proxy only when the source had previously synced successfully. Unknown dates on a first sync remain visible as unknown. Greenhouse uses `first_published`, never `updated_at`; Lever uses `createdAt`.
 
 `apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
+
+Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `resume` / `answers`), inspect the diff and type `import`. This creates a new version and requires review; a new resume needs a fresh PDF. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.

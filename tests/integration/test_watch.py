@@ -257,7 +257,11 @@ def test_two_complete_absences_close_and_reappearance_reopens(
     assert (
         conn.execute("SELECT status FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "closed"
     )
-    assert job["id"] not in {j["id"] for j in list_jobs(conn, profile, sources)}
+    closed = next(j for j in list_jobs(conn, profile, sources) if j["id"] == job["id"])
+    assert "[closed]" in closed["date_label"]
+    assert job["id"] not in {
+        j["id"] for j in list_jobs(conn, profile, sources, prospects_only=True)
+    }
     assert run(cfg, conn, profile, sources, transport)["notified"] == 0
     assert conn.execute("SELECT status FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "open"
     assert tuple(conn.execute("SELECT * FROM applications").fetchone()) == original

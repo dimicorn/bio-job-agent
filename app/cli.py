@@ -80,6 +80,8 @@ def _select(rows, args, *, review=False, min_score=0):
         if (
             not args.all_scores
             and min_score > 0
+            and row.get("review") != "saved"
+            and not row.get("application_state")
             and (row.get("score") is None or row["score"] < min_score)
         ):
             continue
@@ -94,7 +96,9 @@ def _select(rows, args, *, review=False, min_score=0):
         if args.since and row["discovered_at"][:10] < args.since:
             continue
         if args.status is None:
-            if row["review"] == "rejected" or (review and row["review"] == "saved"):
+            if row["review"] == "rejected" or (
+                review and row["review"] == "saved" and not row.get("application_state")
+            ):
                 continue
         elif args.status != "all" and row["review"] != args.status:
             continue
@@ -220,7 +224,15 @@ def _review(conn, rows, cfg=None, profile=None):
         _show_materials(conn, row, profile)
         console.print(
             "o open | s save | r reject | l later | v override | e edit letter | "
-            "w rewrite | d diff | a approve/open | t mark submitted | m state | q quit"
+            "w rewrite | d diff | "
+            + (
+                "a approve/fill"
+                if cfg and cfg.apply.mode == "assisted"
+                else "a approve/open"
+                if cfg and cfg.apply.mode == "manual"
+                else "a approve"
+            )
+            + " | t mark submitted | m state | q quit"
         )
         while True:
             action = read_key()
@@ -272,6 +284,22 @@ def _review(conn, rows, cfg=None, profile=None):
                         console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
                         for path in paths:
                             console.print(_text(path))
+                        if cfg.apply.mode == "assisted":
+                            console.print(
+                                "Press f to start filling; you review and press Submit yourself (any other key skips)."
+                            )
+                            if read_key() == "f":
+                                from app.autopilot import run
+
+                                run(
+                                    cfg,
+                                    conn,
+                                    profile,
+                                    [row],
+                                    job=row["id"],
+                                    output=lambda message: console.print(_text(message)),
+                                )
+                            continue
                         if cfg.apply.mode != "manual":
                             console.print(
                                 f"Run bio-jobs apply {row['id']} to fill in {cfg.apply.mode} mode."
@@ -320,6 +348,7 @@ def _review(conn, rows, cfg=None, profile=None):
                     recommendation = input("Recommendation (apply/maybe/skip): ").strip()
                     reason = input("Reason: ").strip()
                     override_score(conn, row["id"], score, recommendation, reason)
+                    row["score"] = score
                     console.print("Override saved; original evaluation preserved.")
                 except ValueError as exc:
                     console.print(_text(str(exc)))
@@ -606,8 +635,59 @@ def _run(args, cfg):
                 profile,
                 ranked,
                 job=getattr(args, "job", None),
+                unattended=args.command == "autopilot",
                 output=lambda message: console.print(_text(message)),
             )
+            return 0
+        if args.command == "import":
+            row = next((r for r in ranked if r["id"] == args.job), None)
+            if not row:
+                raise ValueError("Unknown or ineligible job ID")
+            old = materials.latest(conn, args.job, args.kind)
+            if not old:
+                raise ValueError(f"Prepare {args.kind} first")
+            path = Path(old["path"])
+            content = path.read_text(encoding="utf-8")
+            import difflib
+
+            console.print(
+                _text(
+                    "".join(
+                        difflib.unified_diff(
+                            old["content"].splitlines(keepends=True),
+                            content.splitlines(keepends=True),
+                            fromfile="stored",
+                            tofile="external",
+                        )
+                    )
+                    or "No changes."
+                )
+            )
+            if content == old["content"]:
+                return 0
+            if input("Type import to save this version: ").strip() != "import":
+                raise ValueError("Import cancelled")
+            current = materials.latest(conn, args.job, args.kind)
+            if current["id"] != old["id"] or path.read_text(encoding="utf-8") != content:
+                raise ValueError("Material changed during confirmation; review again")
+            warnings = ["Externally edited material: review all content and claims"]
+            if args.kind == "answers" and yaml.safe_load(content) != {
+                "items": answers.plan(cfg, conn, row)
+            }:
+                warnings.append(
+                    "Answers differ from the answer bank; update the bank and regenerate before approval"
+                )
+            item = materials.save_version(
+                cfg,
+                conn,
+                profile,
+                row,
+                args.kind,
+                content,
+                warnings,
+                {"source": "external import", "previous_version": old["id"]},
+            )
+            console.print(_text(item["path"]))
             return 0
         if args.command in ("letters", "resume", "pdf", "answers"):
             from app.resume import require_reviewed
@@ -616,11 +696,20 @@ def _run(args, cfg):
             selected = [r for r in ranked if not args.job or r["id"] == args.job]
             if args.job and not selected:
                 raise ValueError("Unknown or ineligible job ID")
+            if args.job and (
+                selected[0].get("score") is None or selected[0]["score"] < cfg.analyst.min_score
+            ):
+                raise ValueError(applications.score_gate_message(cfg, selected[0]))
             if args.command == "letters":
                 done = materials.write_letters(cfg, conn, profile, selected, force=args.force)
                 console.print(
                     f"Prepared {done} letters. Review shows warnings and fact provenance."
                 )
+                if args.job and not done:
+                    console.print(
+                        "No new letter prepared; the current version may already be up to date. Use --force to rebuild."
+                    )
+                    return 1
             elif args.command == "answers":
                 if args.add:
                     if not args.job:
@@ -731,6 +820,11 @@ def main(argv=None) -> int:
         action="store_true",
         help="Save drafts and list unanswered questions without prompting",
     )
+    material_import = sub.add_parser(
+        "import", help="Review and import an externally edited material"
+    )
+    material_import.add_argument("job", type=_positive)
+    material_import.add_argument("--kind", required=True, choices=["letter", "resume", "answers"])
     diff = sub.add_parser("diff", help="Diff latest two material versions")
     diff.add_argument("job", type=_positive)
     diff.add_argument("--kind", choices=["letter", "resume", "answers"])
@@ -759,6 +853,7 @@ def main(argv=None) -> int:
     if args.command == "run":
         args.command = "autopilot"
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         cfg = Settings()
         if args.config:

@@ -249,14 +249,17 @@ def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discove
             scored, scoring_error = 0, str(exc)
             output(scoring_error)
         ranked = analyst.attach_evaluations(
-            conn, cfg, profile, list_jobs(conn, profile, sources, cfg)
+            conn, cfg, profile, list_jobs(conn, profile, sources, cfg, prospects_only=True)
         )
         notified = queue_alerts(cfg, conn, ranked)
         delivery_errors += deliver_pending(cfg, conn, output)
         if scheduled and cfg.apply.mode == "auto" and not scoring_error:
             from app.autopilot import run as apply_run
 
-            apply_run(cfg, conn, profile, ranked, output=output)
+            queue = analyst.attach_evaluations(
+                conn, cfg, profile, list_jobs(conn, profile, sources, cfg)
+            )
+            apply_run(cfg, conn, profile, queue, output=output, unattended=True)
         errors = sum(r["status"] in ("error", "partial") for r in results)
         output(
             f"Watch: {len(results)} sources, {errors} source errors/partial; scored {scored}; "

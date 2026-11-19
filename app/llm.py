@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -338,6 +339,16 @@ def run_openai(system: str, user: str, model: type[BaseModel], cfg: Settings) ->
     ]
     cache_key = (url, a.model)
     headers = {"Authorization": f"Bearer {key}"} if key else {}
+    cache_dir = cfg.resolved(cfg.llm_state_dir)
+    cache_path = cache_dir / (
+        "format-" + hashlib.sha256(repr(cache_key).encode()).hexdigest() + ".json"
+    )
+    try:
+        cached = int(cache_path.read_text())
+        if cached in range(len(formats)):
+            _FORMAT.setdefault(cache_key, cached)
+    except (OSError, ValueError):
+        pass
     for i in range(_FORMAT.get(cache_key, 0), len(formats)):
         body = {
             "max_tokens": a.max_tokens,
@@ -363,6 +374,11 @@ def run_openai(system: str, user: str, model: type[BaseModel], cfg: Settings) ->
         _http_error(response)
         data = response.json()
         _FORMAT[cache_key] = i
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cache_path.write_text(str(i))
+        except OSError:
+            pass
         u = data.get("usage") or {}
         choice = (data.get("choices") or [{}])[0]
         text = (choice.get("message") or {}).get("content")

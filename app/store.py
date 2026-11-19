@@ -16,14 +16,12 @@ def parse_date(value):
         return None
 
 
-def list_jobs(conn, profile, sources, cfg=None, now=None):
+def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=False):
     current_sources = {s.id: s for s in sources if s.enabled}
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
     result = []
-    for row in conn.execute(
-        "SELECT * FROM jobs WHERE status='open' ORDER BY discovered_at DESC,id DESC"
-    ):
+    for row in conn.execute("SELECT * FROM jobs ORDER BY discovered_at DESC,id DESC"):
         job = Posting.model_validate_json(row["payload"])
         origins = [
             dict(x)
@@ -41,7 +39,10 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
             and x["source_id"] in current_sources
             and not exclusion(job, current_sources[x["source_id"]], profile)
         ]
-        if not eligible:
+        retained = not prospects_only and (
+            reviews.get(row["id"]) == "saved" or row["id"] in applications
+        )
+        if (not eligible or row["status"] != "open") and not retained:
             continue
         posted = parse_date(job.posted_at)
         reliable = [parse_date(x["first_seen_at"]) for x in eligible if x["first_seen_reliable"]]
@@ -54,7 +55,8 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
         date = posted or first_seen
         days = cfg.search.max_posting_age_days if cfg else 0
         current = now or datetime.now(UTC)
-        if days and date and date < current.astimezone(UTC) - timedelta(days=days):
+        stale = bool(days and date and date < current.astimezone(UTC) - timedelta(days=days))
+        if stale and not retained:
             continue
         label = (
             f"posted {job.posted_at}"
@@ -63,6 +65,10 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
             if first_seen
             else "posting date unknown"
         )
+        if stale:
+            label += " [stale]"
+        if row["status"] != "open":
+            label += " [closed]"
         cooldown = (
             company_cooldown(conn, job.employer, cfg.apply.company_cooldown_days, now=current)
             if cfg

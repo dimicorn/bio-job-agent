@@ -74,6 +74,7 @@ def test_openai_fallback_cache_usage_and_key(cfg, monkeypatch):
 
     monkeypatch.setattr(llm.httpx, "post", post)
     assert llm.ask_json(cfg, "system", "job text", Ping).ok
+    llm._FORMAT.clear()  # Simulate a new process reading the negotiated format.
     assert llm.ask_json(cfg, "system", "job text", Ping).ok
     assert [c.get("response_format", {}).get("type") for c in calls] == [
         "json_schema",

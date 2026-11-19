@@ -163,3 +163,22 @@ def test_ambiguous_attempt_still_counts_after_manual_stop(conn, profile, sources
         (row["id"], datetime.now(UTC).isoformat()),
     )
     assert applications.company_cooldown(conn, row["employer"], 30)
+
+
+def test_saved_stale_job_remains_visible_but_not_a_prospect(conn, profile, sources, transport):
+    from app.store import review_job
+
+    discover(conn, profile, sources, transport=transport, pause=lambda _: None)
+    cfg = Settings()
+    row = list_jobs(conn, profile, sources, cfg)[0]
+    payload = json.loads(
+        conn.execute("SELECT payload FROM jobs WHERE id=?", (row["id"],)).fetchone()[0]
+    )
+    payload["posted_at"] = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    conn.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
+    review_job(conn, row["id"], "saved")
+    visible = next(r for r in list_jobs(conn, profile, sources, cfg) if r["id"] == row["id"])
+    assert "[stale]" in visible["date_label"]
+    assert row["id"] not in {
+        r["id"] for r in list_jobs(conn, profile, sources, cfg, prospects_only=True)
+    }
