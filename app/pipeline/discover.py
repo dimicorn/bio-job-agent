@@ -8,6 +8,7 @@ import httpx
 from app.candidate.profile import import_profile
 from app.pipeline.dedupe import store_job
 from app.pipeline.filter import exclusion
+from app.runlog import record
 from app.sources.base import PublicClient, RateLimited
 from app.sources.registry import ADAPTERS
 
@@ -53,6 +54,7 @@ def discover(
                 "SELECT next_allowed_at FROM sources WHERE id=?", (source.id,)
             ).fetchone()[0]
             if next_allowed and datetime.fromisoformat(next_allowed) > datetime.now(UTC):
+                record("sources", {"id": source.id, "status": "cooldown"})
                 results.append(
                     {"source": source.id, "status": "cooldown", "next_allowed_at": next_allowed}
                 )
@@ -66,6 +68,7 @@ def discover(
             ).fetchone()[0]
             if next_allowed and datetime.fromisoformat(next_allowed) > datetime.now(UTC):
                 conn.commit()
+                record("sources", {"id": source.id, "status": "cooldown"})
                 results.append({"source": source.id, "status": "cooldown"})
                 continue
             next_allowed = (
@@ -80,6 +83,10 @@ def discover(
                 (source.id, profile_id, now),
             ).lastrowid
             conn.commit()
+            before = {
+                row[0]: (row[1], row[2])
+                for row in conn.execute("SELECT id,payload,status FROM jobs")
+            }
             counts = {"fetched": 0, "accepted": 0, "rejected": 0, "malformed": 0}
             error = None
             seen = set()
@@ -165,8 +172,10 @@ def discover(
                 (utcnow(), status, *counts.values(), error, run_id),
             )
             conn.execute(
-                "UPDATE sources SET health=?,last_checked_at=?,next_allowed_at=? WHERE id=?",
-                (status, now, next_allowed, source.id),
+                """UPDATE sources SET health=?,last_checked_at=?,next_allowed_at=
+                CASE WHEN next_allowed_at IS NULL OR julianday(next_allowed_at)<julianday(?)
+                THEN ? ELSE next_allowed_at END WHERE id=?""",
+                (status, now, next_allowed, next_allowed, source.id),
             )
             if error:
                 conn.execute(
@@ -174,6 +183,26 @@ def discover(
                     (error, now, source.id),
                 )
             conn.commit()
+            after = {
+                row[0]: (row[1], row[2])
+                for row in conn.execute("SELECT id,payload,status FROM jobs")
+            }
+            for job_id, (payload, state) in after.items():
+                old = before.get(job_id)
+                if old is None:
+                    record("jobs", {"id": job_id, "change": "new"})
+                elif state == "closed" and old[1] != "closed":
+                    record("jobs", {"id": job_id, "change": "closed"})
+                elif payload != old[0] or state != old[1]:
+                    record("jobs", {"id": job_id, "change": "changed"})
+            record(
+                "sources",
+                {
+                    "id": source.id,
+                    "status": status,
+                    "error_category": error.split(":", 1)[0] if status == "error" else None,
+                },
+            )
             results.append({"source": source.id, "status": status, **counts, "error": error})
     return results
 

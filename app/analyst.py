@@ -252,8 +252,14 @@ def analyze_new(cfg, conn, profile, sources):
                 results = future.result()
             except Exception as exc:  # noqa: BLE001 - isolate provider failures per batch
                 from app.llm import AnswerTerminated
+                from app.runlog import record
 
                 batch = futures[future]
+                for row, _ in batch:
+                    record(
+                        "scoring",
+                        {"id": row["id"], "status": "failed", "error_category": type(exc).__name__},
+                    )
                 ids = ", ".join(str(row["id"]) for row, _ in batch)
                 detail = str(exc) if isinstance(exc, AnswerTerminated) else type(exc).__name__
                 errors.append(f"jobs {ids}: {detail}")
@@ -272,6 +278,9 @@ def analyze_new(cfg, conn, profile, sources):
                         cfg.analyst.weights.model_dump_json(),
                     ),
                 )
+                from app.runlog import record
+
+                record("scoring", {"id": row["id"], "status": "scored"})
                 done += 1
             conn.commit()
     if errors:

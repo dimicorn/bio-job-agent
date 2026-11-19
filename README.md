@@ -285,3 +285,9 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 `apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
+
+Each `sync`, `scan`, `watch`, `autopilot`, and `apply` command writes a local run summary
+under the gitignored `run-summaries/` directory. Use `bio-jobs stats --runs` to inspect run IDs,
+source outcomes, job changes, scoring failures, application transitions, and notification
+results. Summaries contain IDs and error categories, never CVs, answers, credentials, or provider
+response text. A summary left in `running` state indicates the process did not finish cleanly.

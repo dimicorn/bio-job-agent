@@ -163,3 +163,46 @@ def test_ambiguous_attempt_still_counts_after_manual_stop(conn, profile, sources
         (row["id"], datetime.now(UTC).isoformat()),
     )
     assert applications.company_cooldown(conn, row["employer"], 30)
+
+
+def test_rate_limit_never_shortens_reservation(conn, profile, sources):
+    import httpx
+
+    source = sources[0].model_copy(update={"min_interval_seconds": 7200})
+
+    def respond(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        return httpx.Response(429, headers={"Retry-After": "900"})
+
+    start = datetime.now(UTC)
+    result = discover(
+        conn, profile, [source], transport=httpx.MockTransport(respond), pause=lambda _: None
+    )
+    deadline = conn.execute(
+        "SELECT next_allowed_at FROM sources WHERE id=?", (source.id,)
+    ).fetchone()[0]
+    assert result[0]["status"] == "error"
+    assert datetime.fromisoformat(deadline) >= start + timedelta(seconds=7199)
+
+
+def test_rate_limit_preserves_concurrent_later_deadline(conn, tmp_path, profile, sources):
+    import httpx
+
+    from app.db import connect
+
+    source = sources[0].model_copy(update={"min_interval_seconds": 7200})
+    later = (datetime.now(UTC) + timedelta(hours=4)).isoformat()
+
+    def respond(request):
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        with connect(tmp_path / "jobs.sqlite3") as other:
+            other.execute("UPDATE sources SET next_allowed_at=? WHERE id=?", (later, source.id))
+        return httpx.Response(429, headers={"Retry-After": "900"})
+
+    discover(conn, profile, [source], transport=httpx.MockTransport(respond), pause=lambda _: None)
+    assert (
+        conn.execute("SELECT next_allowed_at FROM sources WHERE id=?", (source.id,)).fetchone()[0]
+        == later
+    )
