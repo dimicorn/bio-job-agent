@@ -6,6 +6,7 @@ import re
 import yaml
 
 from app.materials import save_version
+from app.private import private_open
 from app.resume import require_reviewed
 
 
@@ -44,13 +45,11 @@ def save_answer(cfg, label, value, employer=None):
         label = f"{employer}: {label}"
     data = {k: v for k, v in data.items() if norm(k) != norm(label)}
     data[label] = value
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "# User-confirmed screening answers; reused across employers.\n"
-        + yaml.safe_dump(data, allow_unicode=True, sort_keys=True),
-        encoding="utf-8",
-    )
-    path.chmod(0o600)
+    with private_open(path, encoding="utf-8") as output:
+        output.write(
+            "# User-confirmed screening answers; reused across employers.\n"
+            + yaml.safe_dump(data, allow_unicode=True, sort_keys=True)
+        )
 
 
 def add_question(conn, job_id, label, options=None, required=True):

@@ -460,6 +460,9 @@ def _stats(conn, cfg):
 
 
 def _run(args, cfg):
+    from app.private import tighten_configured
+
+    tighten_configured(cfg)
     if args.command == "firms":
         return run_firms_command(args, timeout=cfg.http_timeout, user_agent=cfg.user_agent)
     if args.command == "doctor":
@@ -493,6 +496,7 @@ def _run(args, cfg):
         return 0
     if args.command not in ("init", "import-profile"):
         cfg = cfg.with_config()
+    tighten_configured(cfg)
     with connect(cfg.resolved(cfg.database_path)) as conn:
         migrate(conn)
         if args.command == "init":

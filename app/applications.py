@@ -183,5 +183,5 @@ def confirm_submitted(conn, row, confirmation):
         "INSERT INTO application_events(job_id,action,detail) VALUES (?,?,?)",
         (row["id"], "manual_confirmation", json.dumps({"evidence": "user typed submitted"})),
     )
-    materials.state(conn, row["id"], "submitted")
+    materials.state(conn, row["id"], "submitted", reconcile=True)
     row["application_state"] = "submitted"

@@ -20,6 +20,9 @@ console = Console(markup=False)
 
 
 def run(cfg: Settings, *, online=False) -> int:
+    from app.private import tighten_configured
+
+    tighten_configured(cfg)
     rows = []
 
     def report(name, ok, detail):
@@ -30,6 +33,7 @@ def run(cfg: Settings, *, online=False) -> int:
     )
     try:
         configured = cfg.with_config()
+        tighten_configured(configured)
         report("LLM config", True, str(cfg.resolved(cfg.config_path)))
     except (ValueError, OSError, TypeError, yaml.YAMLError):
         configured = None

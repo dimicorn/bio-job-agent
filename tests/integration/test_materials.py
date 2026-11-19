@@ -574,3 +574,82 @@ def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monk
     assert "Claim: Claim." in text
     assert profile.facts[0].fact in text and profile.facts[0].evidence in text
     assert "cited fact 999 no longer exists" in text
+
+
+@pytest.mark.parametrize("terminal", ["submitted", "unknown_result", "withdrawn"])
+def test_terminal_states_survive_preparation_and_reject_state_changes(preparation, conn, terminal):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    materials.state(conn, row["id"], terminal)
+    with pytest.raises(ValueError, match="reconciliation"):
+        materials.state(conn, row["id"], "saved")
+    materials.tailored_resume(cfg, conn, profile, row)
+    answers.collect(cfg, conn, profile, [row], interactive=False, output=lambda _: None)
+    assert (
+        conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[0]
+        == terminal
+    )
+    if terminal == "unknown_result":
+        applications.confirm_submitted(conn, row, "submitted")
+        assert (
+            conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[
+                0
+            ]
+            == "submitted"
+        )
+
+
+def test_unchanged_answer_snapshot_keeps_approval(preparation, conn):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    answers.collect(cfg, conn, profile, [row], interactive=False, output=lambda _: None)
+    before = materials.latest(conn, row["id"], "answers")
+    materials.state(conn, row["id"], "approved")
+    answers.collect(cfg, conn, profile, [row], interactive=False, output=lambda _: None)
+    assert materials.latest(conn, row["id"], "answers")["id"] == before["id"]
+    assert (
+        conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[0]
+        == "approved"
+    )
+    answers.add_question(conn, row["id"], "Synthetic question")
+    answers.collect(cfg, conn, profile, [row], interactive=False, output=lambda _: None)
+    assert (
+        conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[0]
+        == "awaiting_review"
+    )
+
+
+def test_private_artifacts_under_umask(preparation, conn, tmp_path):
+    from app import llm
+    from app.db import connect
+    from app.private import private_file, tighten_configured
+
+    cfg, profile, rows = preparation
+    old = os.umask(0o022)
+    try:
+        result = materials.tailored_resume(cfg, conn, profile, rows[0])
+        answers.save_answer(cfg, "Question", "Synthetic answer")
+        answers.snapshot(cfg, conn, profile, rows[0])
+        llm._event(cfg, "test")
+        pdf = tmp_path / "private" / "resume.pdf"
+        private_file(pdf)
+        db = tmp_path / "new" / "private.sqlite3"
+        with connect(db) as other:
+            other.execute("CREATE TABLE test (value TEXT)")
+            other.execute("INSERT INTO test VALUES ('synthetic')")
+            for path in (db, Path(str(db) + "-wal"), Path(str(db) + "-shm")):
+                assert path.stat().st_mode & 0o777 == 0o600
+        for path in (
+            Path(result["path"]),
+            Path(materials.latest(conn, rows[0]["id"], "answers")["path"]),
+            cfg.apply.answers_file,
+            tmp_path / "llm-usage.jsonl",
+            pdf,
+        ):
+            assert path.stat().st_mode & 0o777 == 0o600
+        assert Path(result["path"]).parent.stat().st_mode & 0o777 == 0o700
+        Path(result["path"]).chmod(0o644)
+        tighten_configured(cfg)
+        assert Path(result["path"]).stat().st_mode & 0o777 == 0o600
+    finally:
+        os.umask(old)
