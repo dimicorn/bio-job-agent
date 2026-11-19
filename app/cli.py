@@ -23,6 +23,7 @@ from app.db import connect, migrate
 from app.pipeline.discover import discover
 from app.settings import ROOT, Settings
 from app.sources.config import load_sources
+from app.sources.feed_review import register_feed_review_command, run_feed_review_command
 from app.sources.firms import register_firms_command, run_firms_command
 from app.store import export_csv, list_jobs, override_score, review_job
 
@@ -534,6 +535,8 @@ def _run(args, cfg):
     from app.private import tighten_configured
 
     tighten_configured(cfg)
+    if args.command == "feed-review":
+        return run_feed_review_command(args)
     if args.command == "firms":
         return run_firms_command(args, timeout=cfg.http_timeout, user_agent=cfg.user_agent)
     if args.command == "doctor":
@@ -928,6 +931,7 @@ def main(argv=None) -> int:
     stats = sub.add_parser("stats", help="Show job decisions, source health and LLM usage")
     stats.add_argument("--runs", action="store_true", help="Show local run summaries")
     register_firms_command(sub)
+    register_feed_review_command(sub)
     args = parser.parse_args(argv)
     if args.command in (None, "help"):
         parser.print_help()
