@@ -104,11 +104,21 @@ def approve(
     return paths
 
 
-def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None):
+def score_gate_message(cfg, row, *, apply=False):
+    threshold = max(cfg.apply.min_score, cfg.analyst.min_score) if apply else cfg.analyst.min_score
+    score = row.get("score")
+    reason = "unscored" if score is None else f"score {score} is below {threshold}"
+    return (
+        f"Job {row['id']} is {reason} (threshold {threshold}). Run bio-jobs analyze; "
+        "or bio-jobs review --all-scores and use v to override with a reason."
+    )
+
+
+def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None, unattended=False):
     now = now or datetime.now().astimezone()
     gate = cfg.apply
     if row.get("score") is None or row["score"] < max(gate.min_score, cfg.analyst.min_score):
-        raise ValueError("Application score is below the apply/analyst threshold")
+        raise ValueError(score_gate_message(cfg, row, apply=True))
     current = conn.execute(
         "SELECT state,submitted_at FROM applications WHERE job_id=?", (row["id"],)
     ).fetchone()
@@ -116,8 +126,13 @@ def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None):
         raise ValueError(
             "Submitted, withdrawn or uncertain applications cannot be approved/applied"
         )
-    if not gate.active_hours[0] <= now.hour < gate.active_hours[1]:
-        raise ValueError("Outside apply.active_hours (local time)")
+    if unattended and not gate.active_hours[0] <= now.hour < gate.active_hours[1]:
+        next_time = now.replace(hour=gate.active_hours[0], minute=0, second=0, microsecond=0)
+        if next_time <= now:
+            next_time += timedelta(days=1)
+        raise ValueError(
+            f"Outside apply.active_hours ({now.tzinfo}); next allowed: {next_time.isoformat()}"
+        )
     if used >= gate.max_per_run:
         raise ValueError("apply.max_per_run reached")
     # Reservations count too: concurrent processes cannot spend the same daily slot.
@@ -147,7 +162,9 @@ def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
             warnings[kind] = found
         path = Path(current["path"])
         if not path.exists() or path.read_text(encoding="utf-8") != current["content"]:
-            raise ValueError(f"{kind} file changed; import/edit or rebuild it before approval")
+            raise ValueError(
+                f"{kind} file changed; run bio-jobs import {row['id']} --kind {kind} before approval"
+            )
         ids[kind] = current["id"]
         paths.append(str(path))
         if kind == "resume":
@@ -162,7 +179,9 @@ def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
             paths.append(current["pdf_path"])
     current_answers = materials.latest(conn, row["id"], "answers")
     if yaml.safe_load(current_answers["content"]) != {"items": answers.plan(cfg, conn, row)}:
-        raise ValueError("Screening answers changed; run answers again")
+        raise ValueError(
+            f"Screening answers changed or differ from the answer bank; update the bank and run bio-jobs answers --job {row['id']}"
+        )
     if warnings and warnings != acknowledged_warnings:
         raise UnresolvedWarnings(warnings, ids)
     return paths, ids

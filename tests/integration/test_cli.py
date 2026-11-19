@@ -92,8 +92,9 @@ def test_review_actions_persist_and_rejection_survives_refresh(
         ]
     output.seek(0)
     output.truncate(0)
+    monkeypatch.setattr(cli, "read_key", lambda: "q")
     assert cli.main(["review"]) == 0
-    assert "No jobs to review" in output.getvalue()
+    assert "No jobs to review" not in output.getvalue()
     keys = iter("lq")
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     assert cli.main(["review", "--status", "saved", "--all-scores"]) == 0

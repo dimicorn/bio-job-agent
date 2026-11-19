@@ -293,7 +293,6 @@ def test_manual_approval_only_and_confirmed_submission(preparation, conn, monkey
     "gate,value,error",
     [
         ("min_score", 99, "threshold"),
-        ("active_hours", (0, 1), "active_hours"),
         ("max_per_run", 1, "max_per_run"),
     ],
 )
@@ -372,6 +371,9 @@ def test_preparation_commands_and_state_visibility(preparation, conn, sources, m
     output = io.StringIO()
     monkeypatch.setattr(cli, "console", Console(file=output, width=200))
     row = rows[0]
+    from app.store import override_score
+
+    override_score(conn, row["id"], 90, "apply", "Synthetic review")
     assert cli.main(["resume", str(row["id"])]) == 0
     assert cli.main(["diff", str(row["id"])]) == 0
     assert cli.main(["answers", "--job", str(row["id"]), "--add", "Visa status?", "--show"]) == 0
@@ -574,3 +576,52 @@ def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monk
     assert "Claim: Claim." in text
     assert profile.facts[0].fact in text and profile.facts[0].evidence in text
     assert "cited fact 999 no longer exists" in text
+
+
+def test_score_gate_and_external_import(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    monkeypatch.setattr(cli, "Settings", lambda: cfg)
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    assert cli.main(["resume", str(row["id"])]) == 1
+    assert "unscored" in output.getvalue() and "bio-jobs analyze" in output.getvalue()
+    from app.store import override_score
+
+    override_score(conn, row["id"], 90, "apply", "Reviewed")
+    old = materials.tailored_resume(cfg, conn, profile, row)
+    Path(old["path"]).write_text(old["content"] + "\nEdited by candidate.\n")
+    monkeypatch.setattr("builtins.input", lambda _: "import")
+    assert cli.main(["import", str(row["id"]), "--kind", "resume"]) == 0
+    new = materials.latest(conn, row["id"], "resume")
+    assert new["id"] != old["id"] and "Edited by candidate" in new["content"]
+    assert "Edited by candidate" in output.getvalue()
+    assert new["pdf_path"] is None
+
+
+def test_hours_only_unattended(preparation, conn):
+    cfg, _, rows = preparation
+    cfg.apply.active_hours = (8, 17)
+    now = datetime(2026, 11, 15, 23, tzinfo=UTC)
+    applications.check_gates(cfg, conn, rows[0], now=now)
+    with pytest.raises(ValueError, match="next allowed.*2026-11-16T08:00:00"):
+        applications.check_gates(cfg, conn, rows[0], now=now, unattended=True)
+
+
+def test_assisted_review_offers_fill_after_approval(preparation, conn, monkeypatch):
+    from app import autopilot
+
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = "assisted"
+    ready(cfg, conn, profile, row, monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    keys = iter("afq")
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    called = []
+    monkeypatch.setattr(autopilot, "run", lambda *args, **kwargs: called.append(kwargs["job"]))
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    cli._review(conn, [row], cfg, profile)
+    assert called == [row["id"]]
+    assert "you review and press Submit yourself" in output.getvalue()

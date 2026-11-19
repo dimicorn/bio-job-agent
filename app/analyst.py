@@ -252,7 +252,7 @@ def analyze_new(cfg, conn, profile, sources):
     from app.store import list_jobs
 
     require_reviewed(cfg, profile)
-    rows = list_jobs(conn, profile, sources, cfg)
+    rows = list_jobs(conn, profile, sources, cfg, prospects_only=True)
     pending = [(row, content_hash(cfg, profile, row)) for row in rows]
     pending = [
         (r, h)
