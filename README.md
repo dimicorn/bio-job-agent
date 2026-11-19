@@ -146,20 +146,25 @@ uv run bio-jobs letters                 # batches jobs at analyst.min_score
 uv run bio-jobs letters --job 42 --force # keep a new version of an existing letter
 uv run bio-jobs resume 42               # tailored, editable Markdown
 uv run bio-jobs pdf 42                  # Chromium PDF plus pdfminer ATS text check
+uv run bio-jobs letter-pdf 42           # optional PDF of the saved cover letter
+uv run bio-jobs diff 42 --source        # compare the current resume file to resume.md
 uv run bio-jobs answers --job 42 --show # prepare screening draft, including an empty draft
 uv run bio-jobs review --status all
 uv run bio-jobs diff 42                 # latest two versions, all material types
 ```
 
-Resume tailoring orders the reviewed facts by relevance to the job, preserving their
-wording, contact lines from the reviewed resume, and fact/evidence references. It does
-not ask a model to invent or expand experience. Edit the resulting Markdown path and
-run `pdf 42` to capture a new version and rebuild it. The ATS check verifies the name,
-email, section order and text ligatures. Missing contact details require your edit.
+Resume preparation preserves the source Markdown and its chronological roles, dates,
+contact details and education exactly. It does not reorder ambiguous Markdown blocks or
+invent experience. The command shows a diff against `resume.md`; `diff 42 --source`
+compares the current editable file, including unsaved edits. Run `pdf 42` to capture
+edits in a new version and rebuild it. The ATS check verifies the name, email, section
+order and text ligatures. Missing contact details require your edit.
 `./setup.sh` installs Chromium; `doctor` reports when it is missing. Install it manually
 with `uv run playwright install chromium` if needed.
 
-Letters are written in the vacancy's language through the configured LLM. Each generated
+Letters are written in the vacancy's language through the configured LLM. Set optional
+`analyst.letter_style` and `analyst.letter_length` in config.yaml to guide the draft;
+the default length is 150–250 words. `letter-pdf` renders the saved letter for upload. Each generated
 candidate claim cites reviewed fact IDs. A deterministic check looks for unsupported
 numbers, technologies, employers, degrees, names and invalid/missing fact references.
 Job text can support statements about the employer, but job requirements do not establish

@@ -543,7 +543,15 @@ def _run(args, cfg):
             if not row:
                 raise ValueError("Unknown job ID")
             if args.command == "diff":
-                console.print(_text(materials.material_diff(conn, args.job, args.kind)))
+                if args.source:
+                    item = materials.latest(conn, args.job, "resume")
+                    if not item:
+                        raise ValueError("No resume exists; run resume for this job first")
+                    console.print(_text(materials.resume_source_diff(
+                        cfg, Path(item["path"]).read_text(encoding="utf-8")
+                    )))
+                else:
+                    console.print(_text(materials.material_diff(conn, args.job, args.kind)))
             else:
                 materials.state(conn, args.job, args.value)
                 console.print(f"Application {args.job}: {args.value}")
@@ -609,7 +617,7 @@ def _run(args, cfg):
                 output=lambda message: console.print(_text(message)),
             )
             return 0
-        if args.command in ("letters", "resume", "pdf", "answers"):
+        if args.command in ("letters", "resume", "pdf", "letter-pdf", "answers"):
             from app.resume import require_reviewed
 
             require_reviewed(cfg, profile)
@@ -652,6 +660,9 @@ def _run(args, cfg):
                 if args.command == "resume":
                     item = materials.tailored_resume(cfg, conn, profile, row)
                     console.print(_text(item["path"]))
+                    console.print(_text(materials.resume_source_diff(cfg, item["content"])))
+                elif args.command == "letter-pdf":
+                    console.print(_text(str(materials.build_letter_pdf(cfg, conn, profile, row))))
                 else:
                     path, issues = materials.build_resume_pdf(cfg, conn, profile, row)
                     console.print(_text(path))
@@ -716,6 +727,7 @@ def main(argv=None) -> int:
     for command, help_text in (
         ("resume", "Tailor reviewed facts as editable Markdown"),
         ("pdf", "Build job resume PDF and run ATS checks"),
+        ("letter-pdf", "Build a PDF of the saved cover letter"),
     ):
         preparation = sub.add_parser(command, help=help_text)
         preparation.add_argument("job", type=_positive)
@@ -734,6 +746,7 @@ def main(argv=None) -> int:
     diff = sub.add_parser("diff", help="Diff latest two material versions")
     diff.add_argument("job", type=_positive)
     diff.add_argument("--kind", choices=["letter", "resume", "answers"])
+    diff.add_argument("--source", action="store_true", help="Compare resume file with resume.md")
     mark = sub.add_parser("state", help="Set preparation state (approval/submitted require review)")
     mark.add_argument("job", type=_positive)
     mark.add_argument(

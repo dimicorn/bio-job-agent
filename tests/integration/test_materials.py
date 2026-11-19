@@ -184,15 +184,27 @@ def test_fact_provenance_and_job_only_qualifications(preparation):
     )
 
 
-def test_tailored_resume_copies_verified_facts_and_preserves_contact(preparation, conn):
+def test_tailored_resume_preserves_source_structure(preparation, conn):
     cfg, profile, rows = preparation
-    rows[0]["description"] = "Python analysis"
+    source = """# Real Name
+real@example.org
+
+## Experience
+### Scientist — Bio Labs | 2020–2024
+- Assays
+- Python analysis
+### Associate — Cell Labs | 2018–2020
+- Research
+
+## Education
+MSc, Example University, 2018
+"""
+    cfg.resume_path.write_text(source)
+    profile.resume_hash = resume.digest(resume.resume_text(cfg))
     item = materials.tailored_resume(cfg, conn, profile, rows[0])
-    assert item["content"].index("Python analysis.") < item["content"].index(
-        "Developed cell assays."
-    )
-    assert "alex@example.org" in item["content"]
-    assert len(json.loads(item["provenance"])["facts"]) == 3
+    assert item["content"] == source.strip()
+    assert materials.resume_source_diff(cfg, item["content"]) == "No differences from resume.md."
+    assert "+Extra" in materials.resume_source_diff(cfg, item["content"] + "\nExtra\n")
     assert item["profile_version"] == import_profile(conn, profile)
 
 
@@ -574,3 +586,44 @@ def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monk
     assert "Claim: Claim." in text
     assert profile.facts[0].fact in text and profile.facts[0].evidence in text
     assert "cited fact 999 no longer exists" in text
+
+
+def test_letter_preferences_and_pdf(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    cfg.analyst.letter_style = "direct and warm"
+    cfg.analyst.letter_length = "80–120 words"
+    calls = []
+    mock_letters(monkeypatch, calls)
+    materials.write_batch(cfg, profile, [rows[0]])
+    assert calls[0]["letter_style"] == "direct and warm"
+    assert calls[0]["letter_length"] == "80–120 words"
+    item = materials.save_version(cfg, conn, profile, rows[0], "letter", "Dear team,\n\nThank you.")
+    monkeypatch.setattr(materials, "browser_available", lambda: True)
+    monkeypatch.setattr(materials, "render_pdf", lambda text, out: out.write_bytes(b"%PDF test"))
+    out = materials.build_letter_pdf(cfg, conn, profile, rows[0])
+    assert out.read_bytes() == b"%PDF test"
+    Path(item["path"]).write_text("changed")
+    with pytest.raises(ValueError, match="changed"):
+        materials.build_letter_pdf(cfg, conn, profile, rows[0])
+
+
+def test_realistic_two_page_resume_pdf(preparation, conn):
+    if not materials.browser_available():
+        pytest.skip("Chromium unavailable")
+    from pdfminer.high_level import extract_text
+    from pdfminer.pdfpage import PDFPage
+
+    cfg, profile, rows = preparation
+    source = "# Synthetic Scientist\nscientist@example.org\n\n## Experience\n"
+    for year in range(2024, 2014, -1):
+        source += f"\n### Scientist, Synthetic Labs — {year - 1}–{year}\n"
+        source += "".join(f"- Developed assay workflow {i} for research teams.\n" for i in range(6))
+    source += "\n## Education\nMSc Biology, Synthetic University, 2014\n"
+    cfg.resume_path.write_text(source)
+    profile.resume_hash = resume.digest(resume.resume_text(cfg))
+    out, issues = materials.build_resume_pdf(cfg, conn, profile, rows[0])
+    assert not issues
+    with out.open("rb") as pdf:
+        assert len(list(PDFPage.get_pages(pdf))) == 2
+    text = extract_text(str(out))
+    assert "Synthetic Scientist" in text and "MSc Biology" in text
