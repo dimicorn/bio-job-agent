@@ -317,6 +317,10 @@ def analyze_new(cfg, conn, profile, sources):
                     model=model or "default",
                     action=action,
                 )
+                from app.runlog import record
+
+                record("scoring", {"id": job_id, "status": "failed", "error_category": type(exc).__name__})
+
                 continue
             for row, key in batch:
                 conn.execute(
@@ -332,6 +336,9 @@ def analyze_new(cfg, conn, profile, sources):
                         cfg.analyst.weights.model_dump_json(),
                     ),
                 )
+                from app.runlog import record
+
+                record("scoring", {"id": row["id"], "status": "scored"})
                 done += 1
                 done_ids.append(row["id"])
             conn.commit()

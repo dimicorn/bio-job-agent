@@ -324,3 +324,8 @@ macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requ
 running are allowed to finish and their results are saved, with saved and unfinished job IDs
 reported. A second Ctrl+C exits immediately. Interrupted submissions retain their existing
 manual-reconciliation safeguards. Exit codes are 130 for Ctrl+C and 143 for SIGTERM.
+Each `sync`, `scan`, `watch`, `autopilot`, and `apply` command writes a local run summary
+under the gitignored `run-summaries/` directory. Use `bio-jobs stats --runs` to inspect run IDs,
+source outcomes, job changes, scoring failures, application transitions, and notification
+results. Summaries contain IDs and error categories, never CVs, answers, credentials, or provider
+response text. A summary left in `running` state indicates the process did not finish cleanly.

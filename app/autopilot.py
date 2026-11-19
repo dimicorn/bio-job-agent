@@ -89,6 +89,9 @@ def arm(cfg, conn, row, attempt, mode, now=None):
     except BaseException:
         conn.rollback()
         raise
+    from app.runlog import record
+
+    record("applications", {"id": row["id"], "from": "approved", "to": "submitting"})
     event(
         conn, row["id"], attempt, "human_submit_handoff" if mode == "assisted" else "submit_intent"
     )
@@ -97,7 +100,15 @@ def arm(cfg, conn, row, attempt, mode, now=None):
 def finish(conn, row, attempt, status, reason):
     conn.execute("UPDATE application_attempts SET status=? WHERE id=?", (status, attempt))
     conn.commit()
+    previous = conn.execute(
+        "SELECT state FROM applications WHERE job_id=?", (row["id"],)
+    ).fetchone()
     materials.state(conn, row["id"], status)
+    from app.runlog import record
+
+    record(
+        "applications", {"id": row["id"], "from": previous[0] if previous else None, "to": status}
+    )
     row["application_state"] = status
     event(conn, row["id"], attempt, "result", status=status, reason=reason)
     return status

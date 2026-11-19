@@ -580,6 +580,13 @@ def _run(args, cfg):
             console.print(f"Origin separated into job {new_id}")
             return 0
         if args.command == "stats":
+            if args.runs:
+                directory = ROOT / "run-summaries"
+                for path in sorted(
+                    directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+                ):
+                    console.print(_text(path.read_text(encoding="utf-8")))
+                return 0
             _stats(conn, cfg)
             return 0
         profile = load_profile(
@@ -918,7 +925,8 @@ def main(argv=None) -> int:
     split = sub.add_parser("unmerge", help="Separate a non-canonical origin from a job")
     split.add_argument("job", type=_positive)
     split.add_argument("origin", type=_positive)
-    sub.add_parser("stats", help="Show job decisions, source health and LLM usage")
+    stats = sub.add_parser("stats", help="Show job decisions, source health and LLM usage")
+    stats.add_argument("--runs", action="store_true", help="Show local run summaries")
     register_firms_command(sub)
     args = parser.parse_args(argv)
     if args.command in (None, "help"):
@@ -932,14 +940,22 @@ def main(argv=None) -> int:
         cfg = Settings()
         if args.config:
             cfg.config_path = args.config.expanduser().resolve()
-
         with (
             stop.installed(),
             stop.prevent_sleep()
             if args.command in ("scan", "analyze", "letters", "watch", "autopilot", "apply")
             else contextlib.nullcontext(),
         ):
+            if args.command in ("sync", "scan", "watch", "autopilot", "apply"):
+                from app.runlog import run
+
+                with run(args.command) as summary:
+                    result = _run(args, cfg)
+                    if result:
+                        summary["exit_code"] = result
+                    return result
             return _run(args, cfg)
+
     except KeyboardInterrupt:
         console.print("Stopped.")
         return stop.exit_code()

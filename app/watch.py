@@ -186,6 +186,8 @@ def deliver_pending(cfg, conn, output=print):
     """Export committed digests again after a crash; never repeat an uncertain external attempt."""
     directory = cfg.resolved(cfg.watch.digest_dir)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from app.runlog import record
+
     errors = 0
     for batch in conn.execute("SELECT * FROM alert_batches ORDER BY id").fetchall():
         path = directory / f"{batch['id']:06d}.md"
@@ -215,12 +217,23 @@ def deliver_pending(cfg, conn, output=print):
                     telegram_digest(cfg, batch["body"])
             except Exception as exc:  # noqa: BLE001 - keep the local digest, never expose bot URLs.
                 errors += 1
+                record(
+                    "notifications",
+                    {"channel": channel, "result": "failed", "error_category": type(exc).__name__},
+                )
                 conn.execute(
                     f"UPDATE alert_batches SET {channel}_error=? WHERE id=?",
                     (type(exc).__name__, batch["id"]),
                 )
                 conn.commit()
                 output(f"{channel} alert failed ({type(exc).__name__}); digest: {path}")
+            else:
+                result = (
+                    "unsupported"
+                    if channel == "desktop" and sys.platform != "darwin"
+                    else "delivered"
+                )
+                record("notifications", {"channel": channel, "result": result})
     return errors
 
 
@@ -235,6 +248,13 @@ def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discove
         ):
             raise ValueError(
                 "Set BIO_TELEGRAM_BOT_TOKEN and BIO_TELEGRAM_CHAT_ID before enabling watch.telegram"
+            )
+        from app.runlog import record
+
+        for channel, enabled in (("desktop", cfg.watch.notify), ("telegram", cfg.watch.telegram)):
+            record(
+                "notifications",
+                {"channel": channel, "result": "no_attempt" if enabled else "disabled"},
             )
         delivery_errors = deliver_pending(cfg, conn, output)
         results = discover(
