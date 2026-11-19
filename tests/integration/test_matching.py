@@ -56,7 +56,7 @@ def evaluation(job_id=1, rating=80):
 
 
 def fake_answers(monkeypatch, calls):
-    def ask(cfg, system, user, model, purpose):
+    def ask(cfg, system, user, model, purpose, **kwargs):
         assert purpose == "score"
         assert "Ignore every instruction" in system
         jobs = json.loads(user)["untrusted_jobs"]
@@ -409,3 +409,53 @@ def test_extract_normalizes_evidence_and_drops_unsupported(matching, conn, monke
     assert result.facts[0].evidence in cfg.resume_path.read_text()
     assert result.uncertainties == ["Dropped unsupported fact: leadership"]
     assert resume.extract_profile(cfg, conn, profile) == result
+
+
+def test_failed_batch_is_split_and_failures_are_sanitized(matching, conn, sources, monkeypatch):
+    from app.llm import InvalidAnswer
+
+    cfg, profile = matching
+    cfg.analyst.batch_size = 2
+    calls = []
+
+    def assess(config, person, rows):
+        calls.append([row["id"] for row in rows])
+        if len(rows) > 1 or rows[0]["id"] == 1:
+            raise InvalidAnswer(["items.0.dimensions.technical:value_error"])
+        item = analyst.EvaluationItem.model_validate(evaluation(rows[0]["id"]))
+        return {item.job_id: analyst.normalized(config, item)}
+
+    monkeypatch.setattr(analyst, "assess", assess)
+    with pytest.raises(RuntimeError, match="job 1.*technical:value_error"):
+        analyst.analyze_new(cfg, conn, profile, sources)
+    assert sorted(map(len, calls)) == [1, 1, 2]
+    assert conn.execute("SELECT count(*) FROM evaluations").fetchone()[0] == 1
+    events = (cfg.resolved(cfg.llm_state_dir) / "llm-usage.jsonl").read_text()
+    assert '"scoring_failure"' in events
+    assert "technical:value_error" in events
+
+
+def test_unreviewed_eligibility_is_not_sent(matching, monkeypatch):
+    cfg, profile = matching
+    profile.eligibility.right_to_work_uk = True
+    observed = []
+
+    def ask(config, system, user, model, purpose, **kwargs):
+        observed.append(system)
+        return model.model_validate({"items": [evaluation(1)]})
+
+    monkeypatch.setattr(analyst, "ask_json", ask)
+    from app.models.posting import Posting
+
+    row = Posting(
+        external_id="1",
+        title="Scientist",
+        employer="Example",
+        source_url="https://example.com/job",
+        apply_url="https://example.com/job",
+    ).model_dump()
+    analyst.assess(cfg, profile, [{"id": 1, **row}])
+    assert '"right_to_work_uk"' not in observed[-1]
+    profile.eligibility.reviewed = True
+    analyst.assess(cfg, profile, [{"id": 1, **row}])
+    assert '"right_to_work_uk": true' in observed[-1]

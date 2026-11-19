@@ -25,6 +25,7 @@ regions:
   oxford: false
 include_unknown_location: true
 
+<<<<<<< HEAD
 # Optional contact details used in application forms
 first_name: ""
 last_name: ""
@@ -34,3 +35,12 @@ city: ""
 linkedin: ""
 github: ""
 website: ""
+=======
+# Enter these facts yourself and set reviewed: true after checking them. Null means unknown.
+eligibility:
+  reviewed: false
+  right_to_work_uk: null
+  needs_sponsorship: null
+  notice_period: null
+  other: []
+>>>>>>> fm/bio-score

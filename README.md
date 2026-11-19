@@ -303,3 +303,12 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 `apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
+
+Scoring uses only eligibility facts you enter in the candidate profile and mark
+`eligibility.reviewed: true`; null means unknown. Edit those fields to correct them.
+Review shows unmet and unknown requirements with candidate and job evidence as
+checks before applying. Missing eligibility evidence never automatically excludes a job.
+Scoring failures identify the job, backend, model, safe validation paths or failure
+category, and a next step in command output and `stats`. Failed batches are split once;
+invalid single-job answers receive one repair attempt and may use the configured
+fallback. Cut-off answers may also use that fallback without a quota cooldown.

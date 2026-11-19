@@ -489,3 +489,86 @@ def test_api_max_tokens_preserves_usage(cfg, monkeypatch):
         llm.ask_json(cfg, "s", "u", Ping)
     event = json.loads((cfg.llm_state_dir / "llm-usage.jsonl").read_text())
     assert event["finish_reason"] == "max_tokens" and event["output"] == 100
+
+
+def test_recorded_deepseek_neutral_unknown_answers():
+    from pathlib import Path
+
+    from app.analyst import Batch
+    from app.llm import _parse
+
+    for number in (1, 2):
+        answer = (
+            Path(__file__).parents[1] / "fixtures" / f"deepseek_score_{number}.json"
+        ).read_text()
+        parsed = _parse(answer, Batch)
+        assert parsed.items[0].dimensions.research_outcomes.score is None
+        assert parsed.items[0].dimensions.salary_arrangements.score is None
+
+
+def test_unknown_normalization_does_not_accept_other_invalid_evidence():
+    import pytest
+    from pydantic import ValidationError
+
+    from app.analyst import Dimension
+
+    base = {
+        "score": 50,
+        "confidence": "unknown",
+        "candidate_evidence": None,
+        "job_evidence": None,
+        "explanation": "unknown",
+    }
+    assert Dimension.model_validate(base).score is None
+    with pytest.raises(ValidationError):
+        Dimension.model_validate({**base, "score": 49})
+    with pytest.raises(ValidationError):
+        Dimension.model_validate({**base, "confidence": "supported"})
+
+
+def test_validation_diagnostics_do_not_leak_input():
+    import pytest
+
+    from app.analyst import Dimension
+    from app.llm import InvalidAnswer, _parse
+
+    with pytest.raises(InvalidAnswer) as error:
+        _parse('{"private CV text": "secret"}', Dimension)
+    assert "secret" not in str(error.value)
+    assert "private CV text" not in str(error.value)
+    assert "score:missing" in str(error.value)
+
+
+def test_scoring_repair_once_then_fallback_without_cooldown(cfg, monkeypatch):
+    cfg.analyst.backend = "command"
+    cfg.analyst.fallback_backend = "openai"
+    cfg.analyst.fallback_settings = {"model": "backup"}
+    calls = []
+
+    def backend(config, name, system, user, model, purpose):
+        calls.append((name, system))
+        if name != "openai":
+            raise llm.InvalidAnswer(["ok:missing"])
+        return Ping(ok=True)
+
+    monkeypatch.setattr(llm, "ask_backend", backend)
+    assert llm.ask_json(cfg, "system", "user", Ping, "score", repair=True).ok
+    assert len(calls) == 3
+    assert "ok:missing" in calls[1][1]
+    assert not (cfg.resolved(cfg.llm_state_dir) / llm.LIMITS_FILE).exists()
+
+
+def test_scoring_cutoff_uses_fallback(cfg, monkeypatch):
+    cfg.analyst.backend = "command"
+    cfg.analyst.fallback_backend = "openai"
+    calls = []
+
+    def backend(config, name, system, user, model, purpose):
+        calls.append(name)
+        if name != "openai":
+            raise llm.AnswerTerminated("cut off", llm.Answer(""))
+        return Ping(ok=True)
+
+    monkeypatch.setattr(llm, "ask_backend", backend)
+    assert llm.ask_json(cfg, "system", "user", Ping, "score", repair=True).ok
+    assert len(calls) == 2

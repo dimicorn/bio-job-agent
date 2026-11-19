@@ -23,6 +23,17 @@ class Regions(BaseModel):
     oxford: bool = False
 
 
+class Eligibility(BaseModel):
+    """Facts entered and reviewed by the person, never extracted from a CV."""
+
+    model_config = ConfigDict(extra="forbid")
+    reviewed: bool = False
+    right_to_work_uk: bool | None = None
+    needs_sponsorship: bool | None = None
+    notice_period: str | None = None
+    other: list[str] = []
+
+
 class CandidateProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
@@ -43,6 +54,7 @@ class CandidateProfile(BaseModel):
     target_titles: list[str]
     regions: Regions = Regions()
     include_unknown_location: bool = True
+    eligibility: Eligibility = Eligibility()
 
 
 def load_profile(path: Path) -> CandidateProfile:
