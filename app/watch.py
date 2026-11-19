@@ -78,8 +78,11 @@ def digest_text(rows):
         employer = " ".join(row["employer"].split())
         lines += [
             f"- {row['id']}: {employer} — {title} ({row['score']}/100)",
-            f"  Location: {' '.join((row['location'] or 'unknown').split())}",
-            f"  {row['apply_url']}",
+            f"  Location: {'; '.join(row.get('locations') or [row['location'] or 'unknown'])}",
+            *[
+                f"  {origin['source_url']} | apply: {origin['apply_url']}"
+                for origin in row["origins"]
+            ],
             "",
         ]
     return "\n".join(lines)

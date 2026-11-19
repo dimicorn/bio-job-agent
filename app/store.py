@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.applications import company_cooldown
 from app.models.posting import Posting
+from app.pipeline.dedupe import group_stored_jobs
 from app.pipeline.filter import exclusion, geography
 
 
@@ -31,6 +32,14 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
                 (row["id"],),
             )
         ]
+        locations = list(
+            dict.fromkeys(
+                Posting.model_validate_json(x["posting_payload"]).location
+                for x in origins
+                if x["posting_payload"]
+                and Posting.model_validate_json(x["posting_payload"]).location
+            )
+        )
         eligible = [
             x
             for x in origins
@@ -38,6 +47,11 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
             and x["present"]
             and x["source_id"] in current_sources
             and not exclusion(job, current_sources[x["source_id"]], profile)
+            and not exclusion(
+                Posting.model_validate_json(x["posting_payload"]) if x["posting_payload"] else job,
+                current_sources[x["source_id"]],
+                profile,
+            )
         ]
         retained = not prospects_only and (
             reviews.get(row["id"]) == "saved" or row["id"] in applications
@@ -77,6 +91,7 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
         result.append(
             {
                 "id": row["id"],
+                "employer_id": row["employer_id"],
                 **job.model_dump(),
                 "date_label": label,
                 "company_cooldown_until": cooldown.isoformat() if cooldown else None,
@@ -87,9 +102,10 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
                 "application_state": applications.get(row["id"]),
                 "geography": geography(job, profile),
                 "origins": origins,
+                "locations": locations,
             }
         )
-    return result
+    return group_stored_jobs(conn, result)
 
 
 def review_job(conn, job_id: int, decision: str) -> None:

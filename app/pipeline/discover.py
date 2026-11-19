@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from app.candidate.profile import import_profile
-from app.pipeline.dedupe import store_job
+from app.pipeline.dedupe import handover, store_job
 from app.pipeline.filter import exclusion
 from app.sources.base import PublicClient, RateLimited
 from app.sources.registry import ADAPTERS
@@ -195,6 +195,10 @@ def close_missing(conn, source_id, seen):
                 "UPDATE job_sources SET missing_count=missing_count+1,present=CASE WHEN missing_count+1>=2 THEN 0 ELSE present END WHERE id=?",
                 (row["id"],),
             )
+    for job in conn.execute(
+        "SELECT DISTINCT job_id FROM job_sources WHERE source_id=?", (source_id,)
+    ):
+        handover(conn, job["job_id"])
     conn.execute(
         """UPDATE jobs SET status='closed' WHERE id IN
         (SELECT job_id FROM job_sources WHERE source_id=?)
