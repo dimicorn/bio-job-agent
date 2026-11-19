@@ -1,6 +1,10 @@
 ALTER TABLE jobs ADD COLUMN owner_origin_id INTEGER REFERENCES job_sources(id);
 ALTER TABLE job_sources ADD COLUMN posting_payload TEXT;
-UPDATE jobs SET owner_origin_id=(SELECT id FROM job_sources WHERE job_id=jobs.id ORDER BY CASE WHEN source_url=json_extract(jobs.payload, '$.source_url') THEN 0 ELSE 1 END, id LIMIT 1);
+UPDATE jobs SET owner_origin_id=COALESCE(
+    (SELECT MIN(id) FROM job_sources WHERE job_id=jobs.id
+     AND source_url=json_extract(jobs.payload, '$.source_url')),
+    (SELECT MIN(id) FROM job_sources WHERE job_id=jobs.id)
+);
 UPDATE job_sources SET posting_payload=(SELECT payload FROM jobs WHERE jobs.owner_origin_id=job_sources.id)
 WHERE id IN (SELECT owner_origin_id FROM jobs);
 CREATE TABLE duplicate_separations (

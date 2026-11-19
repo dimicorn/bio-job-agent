@@ -6,6 +6,8 @@ Public ATS JSON → normalize and filter → deduplicate → SQLite → batched 
 
 ## Install
 
+Python 3.12 or newer and SQLite 3.24.0 or newer with JSON1 support are required.
+
 From a clone of this repository on macOS or Linux, run one command:
 
 ```sh

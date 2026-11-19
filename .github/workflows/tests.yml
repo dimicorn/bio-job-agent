@@ -9,6 +9,7 @@ jobs:
         with:
           version: "0.12.13"
       - run: uv sync --frozen
+      - run: uv run python -c "import sqlite3,sys;print(sys.version, sqlite3.sqlite_version)"
       - run: uv run ruff check app tests
       - run: uv run playwright install --with-deps chromium
       - run: uv run pytest
