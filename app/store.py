@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.applications import company_cooldown
 from app.models.posting import Posting
+from app.pipeline.dedupe import group_stored_jobs
 from app.pipeline.filter import exclusion, geography
 
 
@@ -84,6 +85,7 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
         result.append(
             {
                 "id": row["id"],
+                "employer_id": row["employer_id"],
                 **job.model_dump(),
                 "date_label": label,
                 "company_cooldown_until": cooldown.isoformat() if cooldown else None,
@@ -97,7 +99,7 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
                 "locations": locations,
             }
         )
-    return result
+    return group_stored_jobs(conn, result)
 
 
 def review_job(conn, job_id: int, decision: str) -> None:

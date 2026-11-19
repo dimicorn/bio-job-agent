@@ -41,6 +41,63 @@ def _probable(a, b):
     )
 
 
+def group_stored_jobs(conn, rows):
+    """Group eligible rows without moving or deleting any job history.
+
+    Complete-link matching prevents a third origin from bridging an explicit separation
+    or joining different requisitions through a similar middle posting.
+    """
+    separated = {
+        tuple(row) for row in conn.execute("SELECT origin_a, origin_b FROM duplicate_separations")
+    }
+    groups = []
+    for row in sorted(rows, key=lambda item: (not bool(item.get("application_state")), item["id"])):
+        posting = Posting.model_validate({k: row[k] for k in Posting.model_fields})
+        for group in groups:
+            if row.get("application_state") and any(
+                other.get("application_state") for other in group
+            ):
+                continue
+            compatible = True
+            for other in group:
+                other_posting = Posting.model_validate({k: other[k] for k in Posting.model_fields})
+                pairs = (
+                    tuple(sorted((a["id"], b["id"])))
+                    for a in row["origins"]
+                    for b in other["origins"]
+                )
+                if (
+                    row["employer_id"] != other["employer_id"]
+                    or any(pair in separated for pair in pairs)
+                    or not (
+                        canonical_url(posting.source_url) == canonical_url(other_posting.source_url)
+                        or _probable(posting, other_posting)
+                    )
+                ):
+                    compatible = False
+                    break
+            if compatible:
+                group.append(row)
+                break
+        else:
+            groups.append([row])
+    result = []
+    for group in groups:
+        representative = dict(group[0])
+        representative["grouped_job_ids"] = [item["id"] for item in group]
+        representative["origins"] = [origin for item in group for origin in item["origins"]]
+        representative["locations"] = list(
+            dict.fromkeys(
+                location
+                for item in group
+                for location in (item["locations"] or [item["location"]])
+                if location
+            )
+        )
+        result.append(representative)
+    return result
+
+
 def _update_canonical(conn, job_id, job, now):
     conn.execute(
         """UPDATE jobs SET title_key=?,location_key=?,canonical_url=?,payload=?,
@@ -156,9 +213,33 @@ def store_job(conn, job: Posting, source_id: str, employer_id: int, raw_id: int,
 
 
 def unmerge(conn, job_id, origin_id):
-    origin = conn.execute(
-        "SELECT * FROM job_sources WHERE id=? AND job_id=?", (origin_id, job_id)
-    ).fetchone()
+    origin = conn.execute("SELECT * FROM job_sources WHERE id=?", (origin_id,)).fetchone()
+    if origin and origin["job_id"] != job_id:
+        anchor_origins = conn.execute(
+            "SELECT id FROM job_sources WHERE job_id=?", (job_id,)
+        ).fetchall()
+        other_origins = conn.execute(
+            "SELECT id FROM job_sources WHERE job_id=?", (origin["job_id"],)
+        ).fetchall()
+        anchor = conn.execute(
+            "SELECT employer_id,payload FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        other = conn.execute(
+            "SELECT employer_id,payload FROM jobs WHERE id=?", (origin["job_id"],)
+        ).fetchone()
+        if not anchor or anchor["employer_id"] != other["employer_id"]:
+            raise ValueError("Origin does not belong to this probable duplicate group")
+        a = Posting.model_validate_json(anchor["payload"])
+        b = Posting.model_validate_json(other["payload"])
+        if canonical_url(a.source_url) != canonical_url(b.source_url) and not _probable(a, b):
+            raise ValueError("Origin does not belong to this probable duplicate group")
+        for left in anchor_origins:
+            for right in other_origins:
+                pair = sorted((left["id"], right["id"]))
+                conn.execute("INSERT OR IGNORE INTO duplicate_separations VALUES (?,?)", pair)
+        conn.commit()
+        return origin["job_id"]
+
     others = conn.execute(
         "SELECT id FROM job_sources WHERE job_id=? AND id!=?", (job_id, origin_id)
     ).fetchall()

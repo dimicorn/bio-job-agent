@@ -146,6 +146,8 @@ def _list(rows):
     console.print(table)
     # Keep full copyable links in redirected output and narrow terminals too.
     for row in rows:
+        if len(row.get("grouped_job_ids", [])) > 1:
+            console.print(_text(f"{row['id']} grouped stored job IDs: {row['grouped_job_ids']}"))
         for origin in row["origins"]:
             console.print(
                 _text(
@@ -197,6 +199,8 @@ def _review(conn, rows, cfg=None, profile=None):
     for index, row in enumerate(rows, 1):
         console.rule(f"{index}/{len(rows)}")
         console.print(_text(f"{row['title']} — {row['employer']}"))
+        if len(row.get("grouped_job_ids", [])) > 1:
+            console.print(_text(f"Grouped stored job IDs: {row['grouped_job_ids']}"))
         console.print(_text(f"{row['location'] or 'unknown'}; discovered {row['discovered_at']}"))
         console.print(_text(row.get("date_label", "posting date unknown")))
         if row.get("company_cooldown_until"):
