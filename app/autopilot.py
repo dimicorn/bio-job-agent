@@ -459,7 +459,9 @@ def run(
                 continue
             try:
                 if row.get("status", "open") != "open":
-                    raise ValueError(f"Job {row['id']} is closed; verify it manually before applying")
+                    raise ValueError(
+                        f"Job {row['id']} is closed; verify it manually before applying"
+                    )
                 applications.check_company(cfg, conn, row)
                 applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
             except ValueError as exc:
@@ -484,13 +486,15 @@ def run(
                     row,
                     acknowledged_warnings=json.loads(approved["acknowledged_warnings"]),
                 )
-                if ids != json.loads(approved["material_ids"]) or approved["answers_hash"] != digest(
-                    answers.load_answers(cfg)
-                ):
+                if ids != json.loads(approved["material_ids"]) or approved[
+                    "answers_hash"
+                ] != digest(answers.load_answers(cfg)):
                     raise ValueError("Materials or answers changed; review and approve again")
                 event(conn, row["id"], None, "manual_open", url=row["apply_url"])
                 webbrowser.open(row["apply_url"])
-                output(f"{row['id']}: Complete the application yourself; use review → t to confirm.")
+                output(
+                    f"{row['id']}: Complete the application yourself; use review → t to confirm."
+                )
                 outcomes.append("manual")
                 continue
             browser = browser_factory(cfg)

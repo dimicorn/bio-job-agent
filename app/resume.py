@@ -118,7 +118,13 @@ def extract_profile(cfg, conn, base: CandidateProfile) -> CandidateProfile:
     header = "\n".join(lines[:header_end])
     name = extracted.name.strip()
     evidence = extracted.name_evidence.strip()
-    if not name or not evidence or "\n" in evidence or name not in evidence or evidence not in header:
+    if (
+        not name
+        or not evidence
+        or "\n" in evidence
+        or name not in evidence
+        or evidence not in header
+    ):
         name, evidence = "", ""
     if base.name.strip() and base.name.strip().casefold() != "example candidate":
         name, evidence = base.name, base.name_evidence

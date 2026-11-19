@@ -305,8 +305,8 @@ def test_deepseek_preset_and_doctor_warning(configured, monkeypatch):
 def test_doctor_warns_about_example_name(configured):
     cfg, output = configured
     profile = yaml.safe_load(cfg.candidate_path.read_text())
-    profile['name'] = 'Example candidate'
+    profile["name"] = "Example candidate"
     cfg.candidate_path.write_text(yaml.safe_dump(profile))
     doctor.run(cfg)
-    assert 'Candidate name' in output.getvalue()
-    assert 'Set your name' in output.getvalue()
+    assert "Candidate name" in output.getvalue()
+    assert "Set your name" in output.getvalue()

@@ -319,7 +319,10 @@ def analyze_new(cfg, conn, profile, sources):
                 )
                 from app.runlog import record
 
-                record("scoring", {"id": job_id, "status": "failed", "error_category": type(exc).__name__})
+                record(
+                    "scoring",
+                    {"id": job_id, "status": "failed", "error_category": type(exc).__name__},
+                )
 
                 continue
             for row, key in batch:

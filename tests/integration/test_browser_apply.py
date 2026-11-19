@@ -854,6 +854,8 @@ def test_auto_visible_challenge_can_be_resolved_by_person(prepared, conn, page, 
     )
     assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
     assert notifications and page.evaluate("window.__submissions") == 1
+
+
 def test_interrupted_apply_reports_uncertain_state(prepared, conn, monkeypatch):
     cfg, profile, row = approve(prepared, conn)
     output = []

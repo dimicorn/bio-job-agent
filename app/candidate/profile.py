@@ -76,4 +76,6 @@ def import_profile(conn, profile: CandidateProfile) -> int:
 
 def require_name(profile: CandidateProfile) -> None:
     if not profile.name.strip() or profile.name.strip().casefold() == "example candidate":
-        raise ValueError("Set your name in the candidate profile before generating materials or filling forms")
+        raise ValueError(
+            "Set your name in the candidate profile before generating materials or filling forms"
+        )

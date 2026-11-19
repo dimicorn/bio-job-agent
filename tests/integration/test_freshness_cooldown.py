@@ -182,6 +182,8 @@ def test_saved_stale_job_remains_visible_but_not_a_prospect(conn, profile, sourc
     assert row["id"] not in {
         r["id"] for r in list_jobs(conn, profile, sources, cfg, prospects_only=True)
     }
+
+
 def test_rate_limit_never_shortens_reservation(conn, profile, sources):
     import httpx
 

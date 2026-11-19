@@ -614,7 +614,10 @@ def _run(args, cfg):
                 raise ValueError(f"{target} exists; choose --output or --force to replace it")
             if target.exists() and args.force:
                 existing = load_profile(target)
-                if existing.name.strip() and existing.name.strip().casefold() != "example candidate":
+                if (
+                    existing.name.strip()
+                    and existing.name.strip().casefold() != "example candidate"
+                ):
                     profile = profile.model_copy(
                         update={"name": existing.name, "name_evidence": existing.name_evidence}
                     )
@@ -644,9 +647,13 @@ def _run(args, cfg):
                     item = materials.latest(conn, args.job, "resume")
                     if not item:
                         raise ValueError("No resume exists; run resume for this job first")
-                    console.print(_text(materials.resume_source_diff(
-                        cfg, Path(item["path"]).read_text(encoding="utf-8")
-                    )))
+                    console.print(
+                        _text(
+                            materials.resume_source_diff(
+                                cfg, Path(item["path"]).read_text(encoding="utf-8")
+                            )
+                        )
+                    )
                 else:
                     console.print(_text(materials.material_diff(conn, args.job, args.kind)))
             else:

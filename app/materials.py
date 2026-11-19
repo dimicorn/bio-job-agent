@@ -366,17 +366,26 @@ def tailored_resume(cfg, conn, profile, row):
     # be inferred reliably enough to move bullets without risking chronology.
     source = resume_text(cfg)
     return save_version(
-        cfg, conn, profile, row, "resume", source,
+        cfg,
+        conn,
+        profile,
+        row,
+        "resume",
+        source,
         provenance={"source": "resume.md", "source_hash": digest(source)},
     )
 
 
 def resume_source_diff(cfg, content):
     source = resume_text(cfg)
-    diff = "".join(difflib.unified_diff(
-        source.splitlines(keepends=True), content.splitlines(keepends=True),
-        fromfile="resume.md", tofile="prepared resume",
-    ))
+    diff = "".join(
+        difflib.unified_diff(
+            source.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile="resume.md",
+            tofile="prepared resume",
+        )
+    )
     return diff or "No differences from resume.md."
 
 
@@ -575,7 +584,9 @@ def build_letter_pdf(cfg, conn, profile, row):
         raise ValueError("Chromium missing; run uv run playwright install chromium")
     out = Path(current["path"]).with_suffix(".pdf")
     render_pdf(current["content"], out)
-    conn.execute("UPDATE material_versions SET pdf_path=?,pdf_hash=? WHERE id=?",
-                 (str(out), digest(out.read_bytes().hex()), current["id"]))
+    conn.execute(
+        "UPDATE material_versions SET pdf_path=?,pdf_hash=? WHERE id=?",
+        (str(out), digest(out.read_bytes().hex()), current["id"]),
+    )
     conn.commit()
     return out
