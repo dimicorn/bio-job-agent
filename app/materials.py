@@ -63,7 +63,8 @@ class Letters(BaseModel):
     items: list[Letter]
 
 
-SYSTEM = """Write a 150–250 word plain-text cover letter per job, in the vacancy's language.
+SYSTEM = """Write a plain-text cover letter per job in the vacancy's language.
+Follow letter_length and letter_style when provided; otherwise use 150–250 words.
 Use 3–4 short paragraphs and sign the candidate name. Choose relevant proof points.
 Every candidate claim must come ONLY from reviewed_facts or the resume. Preferences are
 not qualifications. Never invent numbers, technologies, employers, degrees, eligibility,
@@ -253,6 +254,8 @@ def write_batch(cfg, profile, rows, instruction=""):
             {k: r.get(k) for k in ("id", "title", "employer", "description")} for r in rows
         ],
         "rewrite_instruction": instruction,
+        "letter_style": cfg.analyst.letter_style,
+        "letter_length": cfg.analyst.letter_length,
     }
     result = ask_json(cfg, SYSTEM, json.dumps(payload, ensure_ascii=False), Letters, "letter")
     if sorted(x.job_id for x in result.items) != sorted(r["id"] for r in rows):
@@ -365,23 +368,22 @@ def tailored_resume(cfg, conn, profile, row):
     """Tailor order, never qualifications: copy reviewed facts verbatim with fact IDs."""
     require_name(profile)
     require_reviewed(cfg, profile)
-    if not profile.facts:
-        raise ValueError("Resume tailoring needs reviewed facts")
-    words = set(re.findall(r"\w+", row.get("description", "").casefold()))
-    ordered = sorted(
-        enumerate(profile.facts),
-        key=lambda x: -len(words & set(re.findall(r"\w+", x[1].fact.casefold()))),
-    )
+    # Source order is the safe default: role boundaries in arbitrary Markdown cannot
+    # be inferred reliably enough to move bullets without risking chronology.
     source = resume_text(cfg)
-    contacts = [line for line in source.splitlines() if "@" in line and not line.startswith("#")]
-    lines = [f"# {profile.name}", *contacts, ""]
-    trace = []
-    for index, fact in ordered:
-        lines += [f"## {fact.category}", "", fact.fact, ""]
-        trace.append({"fact_id": index, "fact": fact.fact, "evidence": fact.evidence})
     return save_version(
-        cfg, conn, profile, row, "resume", "\n".join(lines), provenance={"facts": trace}
+        cfg, conn, profile, row, "resume", source,
+        provenance={"source": "resume.md", "source_hash": digest(source)},
     )
+
+
+def resume_source_diff(cfg, content):
+    source = resume_text(cfg)
+    diff = "".join(difflib.unified_diff(
+        source.splitlines(keepends=True), content.splitlines(keepends=True),
+        fromfile="resume.md", tofile="prepared resume",
+    ))
+    return diff or "No differences from resume.md."
 
 
 def edit_letter(cfg, conn, profile, row):
@@ -556,10 +558,30 @@ def build_resume_pdf(cfg, conn, profile, row):
         raise ValueError("Chromium missing; run uv run playwright install chromium")
     out = Path(current["path"]).with_suffix(".pdf")
     render_pdf(current["content"], out)
-    issues = ats_check(out, current["content"], profile.name)
+    heading = re.search(r"(?m)^#\s+(.+?)\s*$", current["content"])
+    name = heading.group(1) if heading else profile.name
+    issues = ats_check(out, current["content"], name)
     conn.execute(
         "UPDATE material_versions SET pdf_path=?,ats_warnings=?,pdf_hash=? WHERE id=?",
         (str(out), json.dumps(issues), digest(out.read_bytes().hex()), current["id"]),
     )
     conn.commit()
     return out, issues
+
+
+def build_letter_pdf(cfg, conn, profile, row):
+    """Render the current saved letter; reject unsaved external edits."""
+    require_reviewed(cfg, profile)
+    current = latest(conn, row["id"], "letter")
+    if not current:
+        raise ValueError("No letter exists; run letters --job first")
+    if Path(current["path"]).read_text(encoding="utf-8") != current["content"]:
+        raise ValueError("Letter file changed; edit or rebuild it before creating a PDF")
+    if not browser_available():
+        raise ValueError("Chromium missing; run uv run playwright install chromium")
+    out = Path(current["path"]).with_suffix(".pdf")
+    render_pdf(current["content"], out)
+    conn.execute("UPDATE material_versions SET pdf_path=?,pdf_hash=? WHERE id=?",
+                 (str(out), digest(out.read_bytes().hex()), current["id"]))
+    conn.commit()
+    return out

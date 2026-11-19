@@ -34,6 +34,8 @@ class Analyst(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     preferences: str = ""
+    letter_style: str = ""
+    letter_length: str = ""
     batch_size: int = Field(default=5, ge=1, le=50)
     parallel: int = Field(default=2, ge=1, le=16)
     min_score: int = Field(default=50, ge=0, le=100)

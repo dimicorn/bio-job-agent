@@ -1,6 +1,9 @@
 # Run ./setup.sh to create config.yaml and save credentials in gitignored .env.
 resume: resume.md                    # Relative to this config file; local and gitignored
 analyst:
+  # Optional letter guidance; default length is 150–250 words.
+  letter_style: ""
+  letter_length: ""
   preferences: ""                   # Desired roles, locations, salary and working arrangements
   batch_size: 5
   parallel: 2
