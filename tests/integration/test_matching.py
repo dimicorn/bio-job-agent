@@ -335,7 +335,10 @@ def test_extract_profile_cli_needs_review_and_protects_existing_output(
     assert not extracted.reviewed and extracted.resume_hash == profile.resume_hash
     assert "dropped 1 unsupported facts" in output.getvalue()
     assert cli.main(["extract-profile", "--output", str(target)]) == 1
+    extracted.name = "Pat Edited"
+    target.write_text(yaml.safe_dump(extracted.model_dump()))
     assert cli.main(["extract-profile", "--output", str(target), "--force"]) == 0
+    assert load_profile(target).name == "Pat Edited"
     assert len(calls) == 1
 
 
@@ -407,5 +410,29 @@ def test_extract_normalizes_evidence_and_drops_unsupported(matching, conn, monke
     assert len(result.facts) == 1
     assert result.facts[0].evidence == "Built **“cell culture”**\n  workflows for teams"
     assert result.facts[0].evidence in cfg.resume_path.read_text()
-    assert result.uncertainties == ["Dropped unsupported fact: leadership"]
+    assert result.uncertainties == [
+        "Dropped unsupported fact: leadership", "Candidate name missing from resume header"
+    ]
     assert resume.extract_profile(cfg, conn, profile) == result
+
+
+def test_extract_identity_from_header_and_preserve_edited_name(matching, conn, monkeypatch):
+    cfg, profile = matching
+    cfg.resume_path.write_text('# Anna Example\nPhD, MIT\n')
+    profile.name = 'Example candidate'
+    result = resume.ExtractedProfile(
+        name='Anna Example', name_evidence='Anna Example',
+        facts=[resume.Fact(category='education', fact='PhD, MIT', evidence='PhD, MIT')],
+        specialties=[], uncertainties=[],
+    )
+    monkeypatch.setattr(resume, 'ask_json', lambda *args: result)
+    extracted = resume.extract_profile(cfg, conn, profile)
+    assert extracted.name == 'Anna Example'
+    assert extracted.name_evidence == 'Anna Example'
+    profile.name = 'Edited Person'
+    assert resume.extract_profile(cfg, conn, profile).name == 'Edited Person'
+    cfg.resume_path.write_text('# Experience\nPhD, MIT\n')
+    profile.name = 'Example candidate'
+    missing = resume.extract_profile(cfg, conn, profile)
+    assert missing.name == '' and missing.name_evidence == ''
+    assert 'Candidate name missing from resume header' in missing.uncertainties

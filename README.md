@@ -59,7 +59,7 @@ Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` a
 | `doctor [--online]` | Local setup and source health; opt in to live LLM checks |
 | `firms [--validate]` | List the reviewed employer watchlist; explicitly reverify public boards with `--validate` |
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
-| `extract-profile [--output path] [--force]` | Extract resume facts into an unreviewed YAML profile; retains title/geography preferences; refuses replacement without `--force` |
+| `extract-profile [--output path] [--force]` | Extract resume facts and an evidenced header name into an unreviewed YAML profile; retains edited names and title/geography preferences; refuses replacement without `--force` |
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
@@ -285,3 +285,5 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 `apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
+
+Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or tailored CVs or filling forms.

@@ -26,6 +26,7 @@ class Regions(BaseModel):
 class CandidateProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
+    name_evidence: str = ""
     reviewed: bool = False
     resume_hash: str | None = None
     extraction_version: str | None = None
@@ -51,3 +52,8 @@ def import_profile(conn, profile: CandidateProfile) -> int:
     return conn.execute(
         "SELECT id FROM candidate_profiles WHERE content_hash=?", (digest,)
     ).fetchone()[0]
+
+
+def require_name(profile: CandidateProfile) -> None:
+    if not profile.name.strip() or profile.name.strip().casefold() == "example candidate":
+        raise ValueError("Set your name in the candidate profile before generating materials or filling forms")
