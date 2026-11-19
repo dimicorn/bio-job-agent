@@ -208,6 +208,20 @@ def _review(conn, rows, cfg=None, profile=None):
                         f"job: {dimension['job_evidence'] or 'unknown'}"
                     )
                 )
+            checks = [r for r in row["evaluation"]["must_haves"] if r["status"] != "met"]
+            console.print("Check before applying:")
+            if not checks:
+                console.print(
+                    "  Confirm eligibility and conditions with the employer; absence of a listed requirement is not confirmation."
+                )
+            for requirement in checks[:5]:
+                console.print(
+                    _text(
+                        f"  {requirement['requirement']} ({requirement['status']}); "
+                        f"candidate: {requirement['candidate_evidence'] or 'unknown'}; "
+                        f"job: {requirement['job_evidence']}"
+                    )
+                )
             for requirement in row["evaluation"]["must_haves"]:
                 console.print(
                     _text(
@@ -422,6 +436,13 @@ def _stats(conn, cfg):
                 event = json.loads(line)
                 if isinstance(event, dict) and event.get("event") == "llm":
                     events.append(event)
+                elif isinstance(event, dict) and event.get("event") == "scoring_failure":
+                    console.print(
+                        _text(
+                            f"Scoring failure job {event['job_id']}: {event['category']}; "
+                            f"{event['backend']}/{event['model']}; {event['action']}"
+                        )
+                    )
             except ValueError:
                 continue
     table = Table(

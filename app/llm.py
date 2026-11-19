@@ -110,13 +110,44 @@ def _json_note(model: type[BaseModel]) -> str:
     )
 
 
+class InvalidAnswer(RuntimeError):
+    """Schema errors without provider content or arbitrary field names."""
+
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__("schema validation: " + "; ".join(errors))
+
+
+def _safe_errors(exc: ValidationError, model: type[BaseModel]) -> list[str]:
+    schema = model.model_json_schema()
+    names = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            names.update(node.get("properties", {}).keys())
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    collect(schema)
+    return [
+        ".".join(str(part) if isinstance(part, int) or part in names else "*" for part in e["loc"])
+        + ":"
+        + e["type"]
+        for e in exc.errors(include_input=False, include_context=False, include_url=False)
+    ][:20]
+
+
 def _parse[T: BaseModel](text: str, model: type[T]) -> T:
     text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text.strip())
     try:
         return model.model_validate_json(text, strict=True)
-    except (ValidationError, ValueError) as exc:
-        # Do not echo source data or provider responses into logs/errors.
-        raise RuntimeError("LLM answer does not match the requested JSON schema") from exc
+    except ValidationError as exc:
+        raise InvalidAnswer(_safe_errors(exc, model)) from None
+    except ValueError:
+        raise InvalidAnswer(["json:invalid"]) from None
 
 
 def reset_at(message: str, now: datetime | None = None) -> datetime | None:
@@ -208,19 +239,40 @@ def fallback_cfg(cfg: Settings) -> Settings:
 
 
 def ask_json[T: BaseModel](
-    cfg: Settings, system: str, user: str, model: type[T], purpose="other"
+    cfg: Settings, system: str, user: str, model: type[T], purpose="other", *, repair=False
 ) -> T:
     a = cfg.analyst
+
+    def attempt(config, allow_repair=repair):
+        try:
+            return ask_backend(config, config.analyst.backend, system, user, model, purpose)
+        except InvalidAnswer as exc:
+            if not allow_repair:
+                raise
+            return ask_backend(
+                config,
+                config.analyst.backend,
+                system
+                + "\nCorrect these validation errors in a fresh answer: "
+                + "; ".join(exc.errors),
+                user,
+                model,
+                purpose,
+            )
+
     if not a.fallback_backend:
-        return ask_backend(cfg, a.backend, system, user, model, purpose)
+        return attempt(cfg)
     identity = _identity(cfg)
     with _lock:
         until = max(_limited.get(identity, 0), _limits(cfg).get(identity, 0))
     if until > time.time():
         fb = fallback_cfg(cfg)
-        return ask_backend(fb, fb.analyst.backend, system, user, model, purpose)
+        return attempt(fb)
     try:
-        return ask_backend(cfg, a.backend, system, user, model, purpose)
+        return attempt(cfg)
+    except (InvalidAnswer, AnswerTerminated):
+        fb = fallback_cfg(cfg)
+        return attempt(fb, False)
     except LimitReached as exc:
         reset = reset_at(str(exc))
         until = exc.until or (reset.timestamp() if reset else math.inf)
@@ -242,7 +294,7 @@ def ask_json[T: BaseModel](
             until=until if math.isfinite(until) else None,
         )
         fb = fallback_cfg(cfg)
-        return ask_backend(fb, fb.analyst.backend, system, user, model, purpose)
+        return attempt(fb)
 
 
 def ask_backend[T: BaseModel](
@@ -265,8 +317,11 @@ def ask_backend[T: BaseModel](
         result = _parse(answer.text, model)
         status = "ok"
         return result
-    except AnswerTerminated as exc:
-        answer = exc.answer
+    except Exception as exc:
+        if isinstance(exc, AnswerTerminated):
+            answer = exc.answer
+        exc.scoring_backend = backend
+        exc.scoring_model = cfg.analyst.codex_model if backend == "codex" else cfg.analyst.model
         raise
     finally:
         u = answer.usage
