@@ -319,3 +319,8 @@ invalid single-job answers receive one repair attempt and may use the configured
 fallback. Cut-off answers may also use that fallback without a quota cooldown.
 Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `resume` / `answers`), inspect the diff and type `import`. This creates a new version and requires review; a new resume needs a fresh PDF. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.
 Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or tailored CVs or filling forms.
+Long-running scan, analyze, letters, watch, autopilot and apply commands prevent idle sleep on
+macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already
+running are allowed to finish and their results are saved, with saved and unfinished job IDs
+reported. A second Ctrl+C exits immediately. Interrupted submissions retain their existing
+manual-reconciliation safeguards. Exit codes are 130 for Ctrl+C and 143 for SIGTERM.

@@ -439,74 +439,92 @@ def run(
     selected.sort(key=lambda r: r.get("score") if r.get("score") is not None else -1, reverse=True)
     outcomes = []
     employers = set()
-    for row in selected:
-        if len(outcomes) >= cfg.apply.max_per_run:
-            break
-        employer = key(row["employer"])
-        if employer in employers:
-            continue
-        try:
-            if row.get("status", "open") != "open":
-                raise ValueError(f"Job {row['id']} is closed; verify it manually before applying")
-            applications.check_company(cfg, conn, row)
-            applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
-        except ValueError as exc:
-            if job:
-                raise
-            output(str(exc))
-            continue
-        employers.add(employer)
-        if cfg.apply.mode == "manual":
-            import webbrowser
+    try:
+        for row in selected:
+            if len(outcomes) >= cfg.apply.max_per_run:
+                break
+            employer = key(row["employer"])
+            if employer in employers:
+                continue
+            try:
+                if row.get("status", "open") != "open":
+                    raise ValueError(f"Job {row['id']} is closed; verify it manually before applying")
+                applications.check_company(cfg, conn, row)
+                applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
+            except ValueError as exc:
+                if job:
+                    raise
+                output(str(exc))
+                continue
+            employers.add(employer)
+            if cfg.apply.mode == "manual":
+                import webbrowser
 
-            applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
-            approved = conn.execute(
-                "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
-            ).fetchone()
-            if not approved:
-                raise ValueError("Approval missing; review and approve again")
-            _, ids = applications.validate_materials(
-                cfg,
-                conn,
-                profile,
-                row,
-                acknowledged_warnings=json.loads(approved["acknowledged_warnings"]),
-            )
-            if ids != json.loads(approved["material_ids"]) or approved["answers_hash"] != digest(
-                answers.load_answers(cfg)
-            ):
-                raise ValueError("Materials or answers changed; review and approve again")
-            event(conn, row["id"], None, "manual_open", url=row["apply_url"])
-            webbrowser.open(row["apply_url"])
-            output(f"{row['id']}: Complete the application yourself; use review → t to confirm.")
-            outcomes.append("manual")
-            continue
-        browser = browser_factory(cfg)
-        status = None
-        try:
-            status = apply_one(
-                cfg,
-                conn,
-                profile,
-                row,
-                browser.page,
-                used=len(outcomes),
-                output=output,
-                unattended=unattended,
-            )
-            outcomes.append(status)
-        except ValueError as exc:
-            event(conn, row["id"], None, "execution_rejected", reason=str(exc))
-            if job:
-                raise
-            output(str(exc))
-            break
-        finally:
-            browser.close(leave_open=status != "submitted")
-        output(f"{row['id']}: {status}")
-        if status != "submitted":
-            # Preserve the current form for a person; do not open more application windows.
-            break
+                applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
+                approved = conn.execute(
+                    "SELECT * FROM application_approvals WHERE job_id=?", (row["id"],)
+                ).fetchone()
+                if not approved:
+                    raise ValueError("Approval missing; review and approve again")
+                _, ids = applications.validate_materials(
+                    cfg,
+                    conn,
+                    profile,
+                    row,
+                    acknowledged_warnings=json.loads(approved["acknowledged_warnings"]),
+                )
+                if ids != json.loads(approved["material_ids"]) or approved["answers_hash"] != digest(
+                    answers.load_answers(cfg)
+                ):
+                    raise ValueError("Materials or answers changed; review and approve again")
+                event(conn, row["id"], None, "manual_open", url=row["apply_url"])
+                webbrowser.open(row["apply_url"])
+                output(f"{row['id']}: Complete the application yourself; use review → t to confirm.")
+                outcomes.append("manual")
+                continue
+            browser = browser_factory(cfg)
+            status = None
+            try:
+                status = apply_one(
+                    cfg,
+                    conn,
+                    profile,
+                    row,
+                    browser.page,
+                    used=len(outcomes),
+                    output=output,
+                    unattended=unattended,
+                )
+                outcomes.append(status)
+            except ValueError as exc:
+                event(conn, row["id"], None, "execution_rejected", reason=str(exc))
+                if job:
+                    raise
+                output(str(exc))
+                break
+            finally:
+                browser.close(leave_open=status != "submitted")
+            output(f"{row['id']}: {status}")
+            if status != "submitted":
+                # Preserve the current form for a person; do not open more application windows.
+                break
+    except KeyboardInterrupt:
+        from app import stop
+
+        states = {
+            row["id"]: conn.execute(
+                "SELECT state FROM applications WHERE job_id=?", (row["id"],)
+            ).fetchone()[0]
+            for row in selected
+        }
+        done = [job_id for job_id, state in states.items() if state == "submitted"]
+        unfinished = {job_id: state for job_id, state in states.items() if state != "submitted"}
+        output(
+            f"Interrupted apply: confirmed {done}; unfinished {unfinished}; "
+            f"exit code {stop.exit_code()}. Reconcile uncertain submissions manually."
+        )
+        raise
+
     output(
         f"Apply pass: {len(outcomes)} attempted, {outcomes.count('submitted')} confirmed submitted."
     )

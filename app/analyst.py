@@ -1,7 +1,6 @@
 """Batched, versioned matching after deterministic discovery filters."""
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -269,7 +268,9 @@ def analyze_new(cfg, conn, profile, sources):
         pending[i : i + cfg.analyst.batch_size]
         for i in range(0, len(pending), cfg.analyst.batch_size)
     ]
-    done, errors = 0, []
+    from app import stop
+
+    done, errors, done_ids = 0, [], []
 
     def score_batch(batch):
         try:
@@ -282,57 +283,60 @@ def analyze_new(cfg, conn, profile, sources):
                 return results
             return [(batch, None, exc)]
 
-    with ThreadPoolExecutor(max_workers=cfg.analyst.parallel, thread_name_prefix="bio-score") as ex:
-        futures = [ex.submit(score_batch, batch) for batch in batches]
-        for future in as_completed(futures):
-            for batch, results, exc in future.result():
-                if exc is not None:
-                    from app.llm import AnswerTerminated, InvalidAnswer, LimitReached, _event
+    for _, future in stop.completed_batches(
+        batches, cfg.analyst.parallel, lambda executor, batch: executor.submit(score_batch, batch)
+    ):
+        for batch, results, exc in future.result():
+            if exc is not None:
+                from app.llm import AnswerTerminated, InvalidAnswer, LimitReached, _event
 
-                    a = cfg.analyst
-                    backend = getattr(exc, "scoring_backend", a.backend)
-                    model = getattr(exc, "scoring_model", a.model)
-                    if isinstance(exc, InvalidAnswer):
-                        category = str(exc)
-                        action = "rerun analyze; check model structured output"
-                    elif isinstance(exc, AnswerTerminated):
-                        category = "cut-off"
-                        action = "raise analyst.max_tokens or disable thinking, then rerun analyze"
-                    elif isinstance(exc, LimitReached):
-                        category = "rate limit"
-                        action = "wait for quota reset or configure fallback, then rerun analyze"
-                    else:
-                        category = "provider error"
-                        action = "check provider configuration and connection, then rerun analyze"
-                    job_id = batch[0][0]["id"]
-                    detail = f"job {job_id}: {category}; {backend}/{model or 'default'}; {action}"
-                    errors.append(detail)
-                    _event(
-                        cfg,
-                        "scoring_failure",
-                        job_id=job_id,
-                        category=category,
-                        backend=backend,
-                        model=model or "default",
-                        action=action,
-                    )
-                    continue
-                for row, key in batch:
-                    conn.execute(
-                        """INSERT OR IGNORE INTO evaluations
-                        (job_id,content_hash,scoring_version,profile_version,payload,weights)
-                        VALUES (?,?,?,?,?,?)""",
-                        (
-                            row["id"],
-                            key,
-                            SCORING_VERSION,
-                            version,
-                            results[row["id"]].model_dump_json(),
-                            cfg.analyst.weights.model_dump_json(),
-                        ),
-                    )
-                    done += 1
-                conn.commit()
+                a = cfg.analyst
+                backend = getattr(exc, "scoring_backend", a.backend)
+                model = getattr(exc, "scoring_model", a.model)
+                if isinstance(exc, InvalidAnswer):
+                    category = str(exc)
+                    action = "rerun analyze; check model structured output"
+                elif isinstance(exc, AnswerTerminated):
+                    category = "cut-off"
+                    action = "raise analyst.max_tokens or disable thinking, then rerun analyze"
+                elif isinstance(exc, LimitReached):
+                    category = "rate limit"
+                    action = "wait for quota reset or configure fallback, then rerun analyze"
+                else:
+                    category = "provider error"
+                    action = "check provider configuration and connection, then rerun analyze"
+                job_id = batch[0][0]["id"]
+                detail = f"job {job_id}: {category}; {backend}/{model or 'default'}; {action}"
+                errors.append(detail)
+                _event(
+                    cfg,
+                    "scoring_failure",
+                    job_id=job_id,
+                    category=category,
+                    backend=backend,
+                    model=model or "default",
+                    action=action,
+                )
+                continue
+            for row, key in batch:
+                conn.execute(
+                    """INSERT OR IGNORE INTO evaluations
+                    (job_id,content_hash,scoring_version,profile_version,payload,weights)
+                    VALUES (?,?,?,?,?,?)""",
+                    (
+                        row["id"],
+                        key,
+                        SCORING_VERSION,
+                        version,
+                        results[row["id"]].model_dump_json(),
+                        cfg.analyst.weights.model_dump_json(),
+                    ),
+                )
+                done += 1
+                done_ids.append(row["id"])
+            conn.commit()
+    stop.interrupted_summary("analyze_new", done_ids, [r["id"] for r, _ in pending])
+
     if errors:
         raise RuntimeError(
             f"Scored {done}; {len(errors)} jobs failed ({', '.join(errors)}). "
