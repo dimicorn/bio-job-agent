@@ -1,6 +1,7 @@
 """Terminal discovery, review and provider setup, following the sibling agents."""
 
 import argparse
+import contextlib
 import json
 import logging
 import re
@@ -16,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from app import answers, applications, materials
+from app import answers, applications, materials, stop
 from app.candidate.profile import import_profile, load_profile
 from app.db import connect, migrate
 from app.pipeline.discover import discover
@@ -763,10 +764,17 @@ def main(argv=None) -> int:
         cfg = Settings()
         if args.config:
             cfg.config_path = args.config.expanduser().resolve()
-        return _run(args, cfg)
+
+        with (
+            stop.installed(),
+            stop.prevent_sleep()
+            if args.command in ("scan", "analyze", "letters", "watch", "autopilot", "apply")
+            else contextlib.nullcontext(),
+        ):
+            return _run(args, cfg)
     except KeyboardInterrupt:
         console.print("Stopped.")
-        return 130
+        return stop.exit_code()
     except (
         ValueError,
         TypeError,

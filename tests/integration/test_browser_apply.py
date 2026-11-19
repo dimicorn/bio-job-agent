@@ -538,3 +538,28 @@ def test_hidden_required_custom_question_is_queued(prepared, conn, page):
     assert conn.execute(
         "SELECT 1 FROM screening_questions WHERE label='Unsupported widget'"
     ).fetchone()
+
+
+def test_interrupted_apply_reports_uncertain_state(prepared, conn, monkeypatch):
+    cfg, profile, row = approve(prepared, conn)
+    output = []
+
+    class Browser:
+        def __init__(self, cfg):
+            pass
+
+        def page(self):
+            pass
+
+        def close(self, **kwargs):
+            pass
+
+    def interrupted(*args, **kwargs):
+        conn.execute("UPDATE applications SET state='unknown_result' WHERE job_id=?", (row["id"],))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(autopilot, "apply_one", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        autopilot.run(cfg, conn, profile, [row], browser_factory=Browser, output=output.append)
+    assert "unknown_result" in output[-1]
+    assert "Reconcile uncertain submissions manually" in output[-1]

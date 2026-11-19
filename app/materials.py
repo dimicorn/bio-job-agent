@@ -8,7 +8,6 @@ import re
 import shlex
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -276,32 +275,35 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
         pending[i : i + cfg.analyst.batch_size]
         for i in range(0, len(pending), cfg.analyst.batch_size)
     ]
-    done, errors = 0, []
-    with ThreadPoolExecutor(max_workers=cfg.analyst.parallel) as executor:
-        futures = {
-            executor.submit(write_batch, cfg, profile, batch, instruction): batch
-            for batch in batches
-        }
-        for future in as_completed(futures):
-            try:
-                results = future.result()
-            except Exception as exc:  # noqa: BLE001 - isolate failed provider batches
-                for row in futures[future]:
-                    state(conn, row["id"], "blocked")
-                errors.append(type(exc).__name__)
-                continue
-            for row, item, issues in results:
-                save_version(
-                    cfg,
-                    conn,
-                    profile,
-                    row,
-                    "letter",
-                    item.letter,
-                    issues,
-                    {"claims": [c.model_dump() for c in item.claims]},
-                )
-                done += 1
+    from app import stop
+
+    done, errors, done_ids = 0, [], []
+    for batch, future in stop.completed_batches(
+        batches,
+        cfg.analyst.parallel,
+        lambda executor, batch: executor.submit(write_batch, cfg, profile, batch, instruction),
+    ):
+        try:
+            results = future.result()
+        except Exception as exc:  # noqa: BLE001 - isolate failed provider batches
+            for row in batch:
+                state(conn, row["id"], "blocked")
+            errors.append(type(exc).__name__)
+            continue
+        for row, item, issues in results:
+            save_version(
+                cfg,
+                conn,
+                profile,
+                row,
+                "letter",
+                item.letter,
+                issues,
+                {"claims": [c.model_dump() for c in item.claims]},
+            )
+            done += 1
+            done_ids.append(row["id"])
+    stop.interrupted_summary("write_letters", done_ids, [r["id"] for r in pending])
     if errors:
         raise RuntimeError(f"{done} letters saved; failed batches: {', '.join(errors)}")
     return done

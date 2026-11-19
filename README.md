@@ -285,3 +285,9 @@ BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synt
 `apply.company_cooldown_days` defaults to 30 (0 disables it). Submitted, submitting and uncertain applications block another application to the same normalized employer until the cooldown expires, across sources and application modes. Approval and application are blocked during cooldown. Each apply pass selects at most the highest-scoring eligible approved job per employer.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
+
+Long-running scan, analyze, letters, watch, autopilot and apply commands prevent idle sleep on
+macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already
+running are allowed to finish and their results are saved, with saved and unfinished job IDs
+reported. A second Ctrl+C exits immediately. Interrupted submissions retain their existing
+manual-reconciliation safeguards. Exit codes are 130 for Ctrl+C and 143 for SIGTERM.

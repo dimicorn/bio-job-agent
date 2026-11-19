@@ -1,7 +1,6 @@
 """Batched, versioned matching after deterministic discovery filters."""
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -244,36 +243,41 @@ def analyze_new(cfg, conn, profile, sources):
         pending[i : i + cfg.analyst.batch_size]
         for i in range(0, len(pending), cfg.analyst.batch_size)
     ]
-    done, errors = 0, []
-    with ThreadPoolExecutor(max_workers=cfg.analyst.parallel, thread_name_prefix="bio-score") as ex:
-        futures = {ex.submit(assess, cfg, profile, [r for r, _ in b]): b for b in batches}
-        for future in as_completed(futures):
-            try:
-                results = future.result()
-            except Exception as exc:  # noqa: BLE001 - isolate provider failures per batch
-                from app.llm import AnswerTerminated
+    from app import stop
 
-                batch = futures[future]
-                ids = ", ".join(str(row["id"]) for row, _ in batch)
-                detail = str(exc) if isinstance(exc, AnswerTerminated) else type(exc).__name__
-                errors.append(f"jobs {ids}: {detail}")
-                continue
-            for row, key in futures[future]:
-                conn.execute(
-                    """INSERT OR IGNORE INTO evaluations
-                    (job_id,content_hash,scoring_version,profile_version,payload,weights)
-                    VALUES (?,?,?,?,?,?)""",
-                    (
-                        row["id"],
-                        key,
-                        SCORING_VERSION,
-                        version,
-                        results[row["id"]].model_dump_json(),
-                        cfg.analyst.weights.model_dump_json(),
-                    ),
-                )
-                done += 1
-            conn.commit()
+    done, errors, done_ids = 0, [], []
+    for batch, future in stop.completed_batches(
+        batches,
+        cfg.analyst.parallel,
+        lambda executor, batch: executor.submit(assess, cfg, profile, [r for r, _ in batch]),
+    ):
+        try:
+            results = future.result()
+        except Exception as exc:  # noqa: BLE001 - isolate provider failures per batch
+            from app.llm import AnswerTerminated
+
+            ids = ", ".join(str(row["id"]) for row, _ in batch)
+            detail = str(exc) if isinstance(exc, AnswerTerminated) else type(exc).__name__
+            errors.append(f"jobs {ids}: {detail}")
+            continue
+        for row, key in batch:
+            conn.execute(
+                """INSERT OR IGNORE INTO evaluations
+                (job_id,content_hash,scoring_version,profile_version,payload,weights)
+                VALUES (?,?,?,?,?,?)""",
+                (
+                    row["id"],
+                    key,
+                    SCORING_VERSION,
+                    version,
+                    results[row["id"]].model_dump_json(),
+                    cfg.analyst.weights.model_dump_json(),
+                ),
+            )
+            done += 1
+            done_ids.append(row["id"])
+        conn.commit()
+    stop.interrupted_summary("analyze_new", done_ids, [r["id"] for r, _ in pending])
     if errors:
         raise RuntimeError(
             f"Scored {done}; {len(errors)} batches failed ({', '.join(errors)}). "
