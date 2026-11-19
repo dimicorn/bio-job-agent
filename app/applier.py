@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
@@ -56,8 +57,11 @@ FIELDS_JS = r"""() => {
  const elements = [...document.querySelectorAll(
    'input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option],[aria-required=true],[contenteditable=true]')];
  for (const e of elements) {
+   if (e.matches('[data-bio-upload]') && e.querySelector('.file-upload__filename')) continue;
    if (!e.matches('input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option]') &&
        e.querySelector('input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option]')) continue;
+   // React-select inserts a hidden required validation proxy next to the real combobox.
+   if (e.matches('input[aria-hidden=true]') && e.closest('.select-shell')?.querySelector('[role=combobox]')) continue;
    const type = (e.type || e.getAttribute('role') || e.tagName).toLowerCase();
    if (['hidden','submit','button','reset'].includes(type) && !e.hasAttribute('data-option')) continue;
    if (!visible(e) && !((type === 'file' || e.required || e.getAttribute('aria-required') === 'true') && visible(e.parentElement)) &&
@@ -155,12 +159,21 @@ class FormStop(RuntimeError):
     pass
 
 
+class PartialPlanStop(FormStop):
+    def __init__(self, steps, reasons):
+        super().__init__("; ".join(reasons))
+        self.steps = steps
+        self.reasons = reasons
+
+
 @dataclass
 class Step:
     field: dict
     values: list[str]
     source: str
     file_hash: str | None = None
+    file_observation_key: str | None = None
+    country_signature: dict | None = None
 
 
 class FormApplier:
@@ -168,6 +181,7 @@ class FormApplier:
 
     def __init__(self, page, cfg, event=lambda *a, **k: None):
         self.page, self.scope, self.cfg, self.event = page, page, cfg, event
+        self.uploaded_fields = {}
 
     def open(self, url):
         self.event("open", url=url)
@@ -187,8 +201,43 @@ class FormApplier:
     def form_url(self, url):
         return url
 
-    def check_safety(self):
+    def visible_challenge(self):
+        selector = (
+            'iframe[src*="recaptcha" i],iframe[title*="recaptcha" i],'
+            'iframe[src*="hcaptcha" i],iframe[title*="hcaptcha" i],'
+            'iframe[src*="turnstile" i],iframe[title*="challenge" i],'
+            ".g-recaptcha,.h-captcha,.cf-turnstile,[data-sitekey]"
+        )
         for frame in self.page.frames:
+            nodes = frame.locator(selector)
+            for i in range(nodes.count()):
+                node = nodes.nth(i)
+                if not node.is_visible():
+                    continue
+                visible = node.evaluate("""e => {
+                    const src = e.getAttribute('src') || '';
+                    const invisible = e.dataset.size === 'invisible' || /[?&]size=invisible(?:&|$)/i.test(src);
+                    if (invisible && !/bframe|challenge/i.test(src)) return false;
+                    const r = e.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 &&
+                        r.left < innerWidth && r.top < innerHeight;
+                }""")
+                if visible:
+                    return True
+        return False
+
+    def check_safety(self, *, allow_challenge=False):
+        if not allow_challenge and self.visible_challenge():
+            raise FormStop("CAPTCHA challenge present")
+        for frame in self.page.frames:
+            if (
+                allow_challenge
+                and frame != self.page.main_frame
+                and re.search(
+                    r"recaptcha|hcaptcha|challenges\.cloudflare\.com", frame.url, re.IGNORECASE
+                )
+            ):
+                continue
             for selector, reason in (
                 ("input[type=password]", "Sign-in required"),
                 (
@@ -198,18 +247,9 @@ class FormApplier:
                     ),
                     "MFA/security code required",
                 ),
-                (
-                    (
-                        "iframe[src*=captcha i],iframe[title*=captcha i],.g-recaptcha,.h-captcha,"
-                        "[data-sitekey],[id*=captcha i]"
-                    ),
-                    "CAPTCHA present",
-                ),
             ):
                 nodes = frame.locator(selector)
-                if (reason == "CAPTCHA present" and nodes.count()) or any(
-                    nodes.nth(i).is_visible() for i in range(nodes.count())
-                ):
+                if any(nodes.nth(i).is_visible() for i in range(nodes.count())):
                     raise FormStop(reason)
             # Labelled declarations are handled by the planner and must have an
             # explicit answer. Unlabelled submission declarations still stop.
@@ -246,7 +286,8 @@ class FormApplier:
 
     def plan(self, fields, values, bank, employer, queue, context=None):
         self.queue = queue
-        steps, stops, pending = [], [], []
+        steps, stops, pending, deferred = [], [], [], []
+        unresolved = set()
 
         def add(field, value, source):
             wanted = value if isinstance(value, list) else [value]
@@ -261,7 +302,6 @@ class FormApplier:
                 else None
             )
             steps.append(Step(field, wanted, source, file_hash))
-            self.event("plan", field=field["label"], source=source)
             return True
 
         for field in fields:
@@ -279,7 +319,20 @@ class FormApplier:
                 if value and add(field, value, "answers.yaml (approved snapshot)"):
                     continue
                 queue(label, field["options"], field["required"])
-                stops.append(f"Human declaration/assessment required: {label}")
+                unresolved.add(field["token"])
+                consent = (
+                    field["kind"] == "choices"
+                    and len(field["options"]) == 1
+                    and re.search(
+                        r"\b(consent|agree|terms|confirm|acknowledge)\b",
+                        " ".join(field["options"]),
+                        re.IGNORECASE,
+                    )
+                )
+                if self.cfg.apply.mode == "assisted" and consent:
+                    deferred.append(label)
+                else:
+                    stops.append(f"Human declaration/assessment required: {label}")
                 continue
             key = standard_key(field)
             value = (
@@ -293,7 +346,13 @@ class FormApplier:
                     answers.lookup(bank, employer, label),
                     "answers.yaml (approved snapshot)",
                 )
-            if value and add(field, value, source):
+            if value:
+                if add(field, value, source):
+                    continue
+                queue(label, field["options"], field["required"])
+                unresolved.add(field["token"])
+                if field["required"]:
+                    stops.append(f"Stored answer does not match options: {label}")
                 continue
             if (
                 self.cfg.apply.auto_consent
@@ -310,6 +369,7 @@ class FormApplier:
                 pending.append(field)
             else:
                 queue(label or "Unlabelled field", field["options"], field["required"])
+                unresolved.add(field["token"])
                 if field["required"]:
                     stops.append(f"Unknown required question: {label}")
         if pending:
@@ -355,10 +415,24 @@ class FormApplier:
                         stops.append(f"LLM answer requires review: {field['label']}")
                     continue
                 queue(field["label"] or "Unlabelled field", field["options"], field["required"])
+                unresolved.add(field["token"])
                 if field["required"]:
                     stops.append(f"Unknown required question: {field['label']}")
-        if stops:
-            raise FormStop("; ".join(stops))
+        sources = {step.field["token"]: step.source for step in steps}
+        for field in fields:
+            source = sources.get(field["token"])
+            if source is None:
+                source = (
+                    "needs_human"
+                    if field["required"] or field["token"] in unresolved
+                    else "left_blank"
+                )
+            self.event("plan", field=field["label"], source=source)
+        if stops or deferred:
+            reasons = stops + [f"Consent requires a person: {label}" for label in deferred]
+            if self.cfg.apply.mode == "assisted" and steps:
+                raise PartialPlanStop(steps, reasons)
+            raise FormStop("; ".join(reasons))
         if not steps:
             raise FormStop("No supported application fields found")
         return steps
@@ -367,7 +441,29 @@ class FormApplier:
         f, values = step.field, step.values
         node = self.node(f)
         if f["kind"] == "file":
+            key = "bio-upload-" + uuid.uuid4().hex
+            # Greenhouse removes the input after upload. Capture its File before
+            # the site's change handler runs, without altering its behavior.
+            installed = node.evaluate(
+                """e => {
+                const key = KEY;
+                const group = e.closest('.file-upload');
+                if (!group || !e.id) return false;
+                const id = e.id;
+                group.setAttribute('data-bio-upload', key);
+                window[key] = {file: null};
+                document.addEventListener('change', event => {
+                    if (event.target.id === id && event.target.files?.length === 1)
+                        window[key].file = event.target.files[0];
+                }, true);
+                return true;
+            }""".replace("KEY", json.dumps(key))
+            )
+            if installed:
+                step.file_observation_key = key
             node.set_input_files(values[0])
+            if installed and f.get("api_id"):
+                self.uploaded_fields[f["api_id"]] = f
         elif f["kind"] == "select":
             node.select_option(label=values)
         elif f["kind"] == "choices":
@@ -389,16 +485,43 @@ class FormApplier:
                     if (checked == "true") != selected:
                         control.click()
         elif f["kind"] == "combo":
+            is_country = "country" in f["identity"].casefold().split()
+            if is_country and len(values) == 1 and re.fullmatch(r"[A-Za-z]{2}", values[0]):
+                code = values[0].upper()
+                name = self.scope.evaluate(
+                    "() => new Intl.DisplayNames(['en'], {type:'region'}).of("
+                    + json.dumps(code)
+                    + ")"
+                )
+                if not name or name.upper() == code:
+                    raise FormStop(f"Unrecognized country code: {f['label']}")
+                step.values = values = [name]
             for value in values:
                 node.click()
                 if node.evaluate("e => e.matches('input')"):
                     node.fill(value)
-                option = self.scope.locator("[role=option],.select__option").filter(
-                    has_text=re.compile(r"^\s*" + re.escape(value) + r"\s*$", re.IGNORECASE)
+                    if node.get_attribute("aria-expanded") == "false":
+                        node.press("ArrowDown")
+                country_suffix = (
+                    r"(?:\s*\+\d[\d -]*)?" if "country" in f["identity"].casefold().split() else ""
+                )
+                option = self.scope.locator("[role=option]:visible,.select__option:visible").filter(
+                    has_text=re.compile(
+                        r"^\s*" + re.escape(value) + country_suffix + r"\s*$", re.IGNORECASE
+                    )
                 )
                 option.first.wait_for(state="visible")
                 if option.count() != 1:
                     raise FormStop(f"Ambiguous option: {f['label']}")
+                if is_country:
+                    signature = option.evaluate(r"""e => {
+                        const flag = [...(e.querySelector('.iti__flag')?.classList || [])]
+                            .find(c => /^iti__[a-z]{2}$/.test(c));
+                        const dial = (e.innerText || '').match(/\+\d[\d -]*\s*$/);
+                        return flag && dial ? {flag, dial: dial[0].trim()} : null;
+                    }""")
+                    if signature:
+                        step.country_signature = signature
                 option.click()
         else:
             if len(values) != 1:
@@ -411,9 +534,35 @@ class FormApplier:
     def verify_one(self, step):
         f, wanted = step.field, step.values
         node = self.node(f)
-        if node.count() != 1:
-            raise FormStop(f"Field disappeared or became ambiguous: {f['label']}")
         kind = f["kind"]
+        if node.count() != 1:
+            if kind == "file" and step.file_observation_key:
+                key = json.dumps(step.file_observation_key)
+                group = self.scope.locator(
+                    f'[data-bio-upload="{step.file_observation_key}"] .file-upload__filename'
+                )
+                group.first.wait_for(state="visible", timeout=5000)
+                observed = self.scope.evaluate(
+                    """async () => {
+                    const key = KEY, file = window[key]?.file;
+                    const groups = document.querySelectorAll(`[data-bio-upload="${key}"]`);
+                    const names = groups.length === 1 ? groups[0].querySelectorAll('.file-upload__filename p') : [];
+                    if (!file || names.length !== 1) return null;
+                    const bytes = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+                    return {name: file.name, shown: names[0].textContent.trim(),
+                        hash: [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2,'0')).join('')};
+                }""".replace("KEY", key)
+                )
+                if (
+                    not observed
+                    or observed["hash"] != step.file_hash
+                    or observed["name"] != Path(wanted[0]).name
+                    or observed["shown"] != observed["name"]
+                ):
+                    raise FormStop(f"File content verification mismatch: {f['label']}")
+                self.event("verify", field=f["label"], matched=True, file_hash=step.file_hash)
+                return
+            raise FormStop(f"Field disappeared or became ambiguous: {f['label']}")
         if kind == "file":
             hashes = node.evaluate("""async e => Promise.all([...e.files].map(async f => {
                 const bytes = await crypto.subtle.digest('SHA-256', await f.arrayBuffer());
@@ -433,6 +582,17 @@ class FormApplier:
                 "els => els.map(e => e.checked === true || e.getAttribute('aria-checked') === 'true' || e.getAttribute('aria-pressed') === 'true')"
             )
             got = [v for v, yes in zip(f["options"], selected, strict=True) if yes]
+        elif kind == "combo" and step.country_signature:
+            selected = node.evaluate(r"""e => {
+                const root = e.closest('.select__control');
+                const value = root?.querySelector('[class*=singleValue]');
+                const flag = [...(value?.querySelector('.iti__flag')?.classList || [])]
+                    .find(c => /^iti__[a-z]{2}$/.test(c));
+                const dial = (value?.innerText || '').trim();
+                return {flag: flag || '', dial};
+            }""")
+            got = [json.dumps(selected, sort_keys=True)]
+            wanted = [json.dumps(step.country_signature, sort_keys=True)]
         elif kind == "combo":
             # React-select stores selection in rendered value nodes; typed search is not selection.
             got = node.evaluate(r"""e => {
@@ -445,6 +605,16 @@ class FormApplier:
             }""")
         else:
             got = [node.input_value()]
+        if (
+            kind == "combo"
+            and not step.country_signature
+            and "country" in f["identity"].casefold().split()
+        ):
+            got = [re.sub(r"\s*\+\d[\d -]*$", "", value).strip() for value in got]
+            wanted = [re.sub(r"\s*\+\d[\d -]*$", "", value).strip() for value in wanted]
+        if standard_key(f) == "phone" and kind == "text":
+            got = [re.sub(r"\D", "", value) for value in got]
+            wanted = [re.sub(r"\D", "", value) for value in wanted]
         if sorted(" ".join(v.split()) for v in got) != sorted(" ".join(v.split()) for v in wanted):
             raise FormStop(f"Verification mismatch: {f['label']}")
         self.event(
@@ -497,10 +667,10 @@ class FormApplier:
                 }
         return None
 
-    def wait_confirmation(self, seconds):
+    def wait_confirmation(self, seconds, *, allow_challenge=False):
         deadline = time.monotonic() + seconds
         while True:
-            self.check_safety()
+            self.check_safety(allow_challenge=allow_challenge)
             proof = self.confirmed()
             if proof:
                 return proof
@@ -561,9 +731,16 @@ class GreenhouseApplier(FormApplier):
         for api in self.api_fields:
             dom_id = "candidate-location" if api.id == "location" else api.id
             matches = [f for f in dom if dom_id in f["identity"].split()]
+            if not matches and api.id in self.uploaded_fields:
+                field = self.uploaded_fields[api.id].copy()
+                field["has_value"] = True
+                result.append(field)
+                used.add(field["token"])
+                continue
             if len(matches) != 1:
                 raise FormStop(f"Greenhouse field missing or ambiguous: {api.label} ({api.id})")
             field = matches[0].copy()
+            field["api_id"] = api.id
             if field["token"] in used:
                 raise FormStop(f"Greenhouse fields share a control: {api.label}")
             used.add(field["token"])

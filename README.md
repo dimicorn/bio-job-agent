@@ -262,8 +262,12 @@ log. In assisted mode, review LLM answers in the browser before pressing Submit.
 mode, a required free-text LLM answer stops the application unless `auto_llm_answers` is
 explicitly enabled. After confirmation, use `bio-jobs answers` to save any accepted LLM
 answers yourself; they are never saved automatically. Unknown required questions,
-mismatches, sign-in, MFA and CAPTCHA stop the job as `manual_required`. The browser stays
-open for a person; no challenge is bypassed. Unknown optional questions are queued and left
+mismatches, sign-in, MFA and visible CAPTCHA challenges stop the job as `manual_required`.
+Invisible background CAPTCHA widgets do not block filling. If a visible challenge appears after
+an automatic submission, the agent notifies you and waits for confirmation while you handle it.
+The browser stays open for a person; no challenge is bypassed. In assisted mode an unanswered
+single-option legal consent is left for the person after the other supported fields are filled;
+the application stops for manual completion. Unknown optional questions are queued and left
 blank; an unapproved prefilled value stops the job. After answering a newly discovered
 question, rebuild `answers` and approve again.
 

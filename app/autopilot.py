@@ -14,7 +14,7 @@ from urllib.request import urlopen
 from playwright.sync_api import Error as PlaywrightError
 
 from app import answers, applications, materials
-from app.applier import FormStop, applier_for
+from app.applier import FormStop, PartialPlanStop, applier_for
 from app.resume import digest
 
 
@@ -179,17 +179,23 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
             answers.add_question(conn, row["id"], label, options, required)
             log("question_discovered", question=label, required=required, options=options)
 
-        steps = applier.plan(
-            fields,
-            values,
-            bank,
-            row["employer"],
-            queue,
-            {
-                "resume": versions["resume"]["content"],
-                "facts": [f.model_dump() for f in profile.facts],
-            },
-        )
+        deferred = None
+        try:
+            steps = applier.plan(
+                fields,
+                values,
+                bank,
+                row["employer"],
+                queue,
+                {
+                    "resume": versions["resume"]["content"],
+                    "facts": [f.model_dump() for f in profile.facts],
+                },
+            )
+        except PartialPlanStop as exc:
+            steps, deferred = exc.steps, exc
+            for reason in exc.reasons:
+                output(f"  Left for person: {reason}")
         if not any(s.source == "resume" for s in steps):
             raise FormStop("Resume upload field not found; inspect the form manually")
         for step in steps:
@@ -198,6 +204,14 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
             )
             if step.source == "llm":
                 queue(step.field["label"], step.field["options"], step.field["required"])
+        if deferred:
+            for step in sorted(steps, key=lambda item: item.field["kind"] != "file"):
+                applier.check_safety()
+                applier.fill_one(step)
+            for step in steps:
+                applier.verify_one(step)
+            output(str(deferred) + "; leave these questions for the person in the browser.")
+            raise deferred
         applier.fill(steps)
         screenshot(page, cfg, row, attempt, "filled", log)
         # Re-read immediately before handoff/click, after asynchronous file parsing and screenshots.
@@ -236,7 +250,27 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
             log("submit_click")
             seconds = cfg.apply.confirmation_timeout_seconds
         log("wait_confirmation", timeout_seconds=seconds)
-        proof = applier.wait_confirmation(seconds)
+        try:
+            proof = applier.wait_confirmation(seconds)
+        except FormStop as exc:
+            if mode != "auto" or not applier.visible_challenge():
+                raise
+            from app.watch import notify
+
+            log("challenge_handoff", reason=str(exc))
+            output(
+                "A CAPTCHA challenge appeared. Complete it in the browser; waiting for confirmation."
+            )
+            try:
+                notify(
+                    "Application needs help", "Complete the CAPTCHA challenge in the open browser."
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError) as notification_error:
+                log("notification_failed", error=type(notification_error).__name__)
+            page.bring_to_front()
+            proof = applier.wait_confirmation(
+                cfg.apply.submit_wait_minutes * 60, allow_challenge=True
+            )
         if not proof:
             return finish(
                 conn,
@@ -256,6 +290,16 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print):
     except FormStop as exc:
         # Challenges always require a person, including when they appear after Submit.
         log("safety_stop", reason=str(exc), submission_possible=possible)
+        if mode == "auto" and "CAPTCHA challenge" in str(exc):
+            from app.watch import notify
+
+            try:
+                notify(
+                    "Application needs help",
+                    "A CAPTCHA challenge needs your attention in the browser.",
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError) as notification_error:
+                log("notification_failed", error=type(notification_error).__name__)
         status = "manual_required"
         reason = str(exc)
     except BaseException as exc:

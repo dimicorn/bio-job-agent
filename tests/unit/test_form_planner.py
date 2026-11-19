@@ -113,3 +113,44 @@ def test_single_option_consent_requires_opt_in():
         applier.plan([consent], {}, {}, "Example", lambda *x: None)
     cfg.apply.auto_consent = True
     assert applier.plan([consent], {}, {}, "Example", lambda *x: None)[0].source == "consent"
+
+
+def test_existing_bank_keys_match_api_labels():
+    from app import answers
+
+    bank = {
+        answers.norm("Country*"): "UK",
+        answers.norm("  Phone  "): "+44 0000 000000",
+        answers.norm(
+            "In which of our office locations would you prefer to be based? (Note that certain jobs may only be available in one location - please check the details before applying)*"
+        ): "London",
+        answers.norm("Where did you hear about Iso?*"): ["LinkedIn", "Other"],
+    }
+    assert answers.lookup(bank, "Example", "country") == "UK"
+    assert answers.lookup(bank, "Example", "Phone*") == "+44 0000 000000"
+    assert (
+        answers.lookup(
+            bank,
+            "Example",
+            "In which of our office locations would you prefer to be based? (Note that certain jobs may only be available in one location - please check the details before applying)",
+        )
+        == "London"
+    )
+    assert answers.lookup(bank, "Example", "where did you hear about iso?") == ["LinkedIn", "Other"]
+
+
+def test_stored_answer_that_does_not_match_options_is_not_overridden(monkeypatch):
+    cfg = Settings(_env_file=None, apply=Apply(mode="assisted"))
+    applier = FormApplier(None, cfg)
+    calls = []
+    monkeypatch.setattr("app.llm.ask_json", lambda *args: calls.append(args))
+    with pytest.raises(FormStop, match="Stored answer does not match options"):
+        applier.plan(
+            [field("Office", kind="combo", options=["London and Oxford", "London and Cambridge"])],
+            {},
+            {"office": "London"},
+            "Example",
+            lambda *args: None,
+            {"resume": "", "facts": []},
+        )
+    assert not calls
