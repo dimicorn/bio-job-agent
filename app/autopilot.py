@@ -15,6 +15,7 @@ from playwright.sync_api import Error as PlaywrightError
 
 from app import answers, applications, materials
 from app.applier import FormStop, PartialPlanStop, applier_for
+from app.private import private_dir, private_file, private_open
 from app.resume import digest
 
 
@@ -83,10 +84,7 @@ def arm(cfg, conn, row, attempt, mode, now=None):
     try:
         applications.check_company(cfg, conn, row, now=now)
         conn.execute("UPDATE application_attempts SET submission_possible=1 WHERE id=?", (attempt,))
-        conn.execute(
-            "UPDATE applications SET state='submitting', updated_at=? WHERE job_id=?",
-            ((now or datetime.now().astimezone()).isoformat(), row["id"]),
-        )
+        materials.state(conn, row["id"], "submitting", commit=False)
         conn.commit()
     except BaseException:
         conn.rollback()
@@ -136,10 +134,10 @@ def values_for(conn, profile, ids):
 
 def screenshot(page, cfg, row, attempt, name, log):
     directory = cfg.resolved(cfg.apply.audit_dir)
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_dir(directory)
     path = directory / f"{row['id']}-{attempt}-{name}.png"
+    private_file(path)
     page.screenshot(path=str(path), full_page=True)
-    path.chmod(0o600)
     log("screenshot", stage=name, path=str(path))
     return path
 
@@ -172,11 +170,10 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
 
         if any(f["kind"] == "file" and standard_key(f) == "letter" for f in fields):
             directory = cfg.resolved(cfg.apply.audit_dir)
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_dir(directory)
             pdf = directory / f"letter-{versions['letter']['id']}.pdf"
             with ThreadPoolExecutor(1) as pool:
                 pool.submit(materials.render_pdf, values["letter"], pdf).result()
-            pdf.chmod(0o600)
             values["letter_file"] = str(pdf)
 
         def queue(label, options, required):
@@ -341,8 +338,8 @@ class Browser:
         from playwright.sync_api import sync_playwright
 
         profile = self.cfg.resolved(self.cfg.apply.profile_dir)
-        profile.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.lock = (profile / ".bio-apply.lock").open("a")
+        private_dir(profile)
+        self.lock = private_open(profile / ".bio-apply.lock", "a")
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -370,7 +367,7 @@ class Browser:
             executable = self.pw.chromium.executable_path
             if not Path(executable).exists():
                 raise ValueError("Install Chromium: uv run playwright install chromium")
-            with (profile / "browser.log").open("ab") as log:
+            with private_open(profile / "browser.log", "ab") as log:
                 subprocess.Popen(
                     [
                         executable,

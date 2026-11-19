@@ -2,12 +2,16 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from app.private import private_file, tighten_tree
+
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
 
 @contextmanager
 def connect(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_file(path)
+    for suffix in ("-wal", "-shm"):
+        tighten_tree(str(path) + suffix)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")

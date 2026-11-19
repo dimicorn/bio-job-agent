@@ -200,8 +200,11 @@ def test_unconfirmed_result_is_never_retried(prepared, conn, page, ats, mode):
     mock_form(page, ats, result="history.replaceState(null,'','/confirmation')")
     assert autopilot.apply_one(cfg, conn, profile, row, page) == "unknown_result"
     assert page.evaluate("window.__submissions") == (1 if mode == "auto" else 0)
-    # A URL named confirmation is not acknowledgement. Even resetting a state cannot enable retries.
-    materials.state(conn, row["id"], "approved")
+    # The state guard rejects downgrades; even an out-of-band DB edit cannot enable retries.
+    with pytest.raises(ValueError, match="reconciliation"):
+        materials.state(conn, row["id"], "approved")
+    conn.execute("UPDATE applications SET state='approved' WHERE job_id=?", (row["id"],))
+    conn.commit()
     with pytest.raises(ValueError, match="never retry"):
         autopilot.apply_one(cfg, conn, profile, row, page)
     with pytest.raises(ValueError, match="never retry"):

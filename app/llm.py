@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from app.private import private_dir, private_open
 from app.settings import Analyst, Settings
 
 BACKENDS = ("codex", "claude_code", "api", "openai", "command", "opencode", "pi")
@@ -220,8 +221,7 @@ def _limits(cfg: Settings) -> dict[str, float]:
 
 def _event(cfg: Settings, event: str, **values) -> None:
     path = _state(cfg, "llm-usage.jsonl")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _lock, path.open("a", encoding="utf-8") as output:
+    with _lock, private_open(path, "a", encoding="utf-8") as output:
         output.write(json.dumps({"at": time.time(), "event": event, **values}) + "\n")
 
 
@@ -283,9 +283,10 @@ def ask_json[T: BaseModel](
             if math.isfinite(until):
                 limits[identity] = until
             path = _state(cfg, LIMITS_FILE)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            private_dir(path.parent)
             temporary = path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(limits), encoding="utf-8")
+            with private_open(temporary, encoding="utf-8") as output:
+                output.write(json.dumps(limits))
             temporary.replace(path)
         _event(
             cfg,

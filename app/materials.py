@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.candidate.profile import import_profile
 from app.llm import ask_json
+from app.private import private_dir, private_file, private_open
 from app.resume import digest, require_reviewed, resume_text
 
 STATES = (
@@ -78,10 +79,22 @@ def job_hash(row):
     return digest([row["title"], row["employer"], row.get("description"), row["apply_url"]])
 
 
-def state(conn, job_id, value):
+def state(conn, job_id, value, *, reconcile=False, commit=True):
     if value not in STATES:
         raise ValueError("Unknown application state")
+    started = not conn.in_transaction
+    if started:
+        conn.execute("BEGIN IMMEDIATE")
     previous = conn.execute("SELECT state FROM applications WHERE job_id=?", (job_id,)).fetchone()
+    if (
+        previous
+        and previous[0] in ("submitted", "unknown_result", "withdrawn")
+        and previous[0] != value
+        and not (reconcile and previous[0] == "unknown_result" and value == "submitted")
+    ):
+        if started:
+            conn.rollback()
+        raise ValueError("Terminal application state requires explicit reconciliation")
     conn.execute(
         """INSERT INTO applications(job_id,state) VALUES (?,?)
         ON CONFLICT(job_id) DO UPDATE SET state=excluded.state,
@@ -94,7 +107,8 @@ def state(conn, job_id, value):
         "INSERT INTO application_events(job_id,action,detail) VALUES (?,?,?)",
         (job_id, "state", json.dumps({"from": previous[0] if previous else None, "to": value})),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def latest(conn, job_id, kind):
@@ -183,8 +197,22 @@ def save_version(cfg, conn, profile, row, kind, content, warnings=(), provenance
     if not content.strip():
         raise ValueError("Material cannot be empty")
     version = import_profile(conn, profile)
+    old = latest(conn, row["id"], kind)
+    current_state = conn.execute(
+        "SELECT state FROM applications WHERE job_id=?", (row["id"],)
+    ).fetchone()
+    if (
+        current_state
+        and current_state[0] == "approved"
+        and old
+        and old["content"] == content
+        and old["profile_version"] == version
+        and old["job_hash"] == job_hash(row)
+        and old["warnings"] == json.dumps(list(warnings))
+    ):
+        return old
     directory = cfg.resolved(cfg.materials_path) / str(row["id"])
-    directory.mkdir(parents=True, exist_ok=True)
+    private_dir(directory)
     cursor = conn.execute(
         """INSERT INTO material_versions
         (job_id,profile_version,kind,content,path,warnings,provenance,job_hash)
@@ -202,9 +230,14 @@ def save_version(cfg, conn, profile, row, kind, content, warnings=(), provenance
     )
     suffix = "yaml" if kind == "answers" else "md"
     path = directory / f"{kind}-v{cursor.lastrowid}.{suffix}"
-    path.write_text(content, encoding="utf-8")
+    with private_open(path, encoding="utf-8") as output:
+        output.write(content)
     conn.execute("UPDATE material_versions SET path=? WHERE id=?", (str(path), cursor.lastrowid))
-    state(conn, row["id"], "awaiting_review")
+    current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
+    if current and current[0] in ("submitted", "unknown_result", "withdrawn"):
+        conn.commit()
+    else:
+        state(conn, row["id"], "awaiting_review")
     return latest(conn, row["id"], kind)
 
 
@@ -271,7 +304,16 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
             or old["job_hash"] != job_hash(row)
         ):
             pending.append(row)
-            state(conn, row["id"], "preparing")
+            current = conn.execute(
+                "SELECT state FROM applications WHERE job_id=?", (row["id"],)
+            ).fetchone()
+            if not current or current[0] not in (
+                "approved",
+                "unknown_result",
+                "submitted",
+                "withdrawn",
+            ):
+                state(conn, row["id"], "preparing")
     batches = [
         pending[i : i + cfg.analyst.batch_size]
         for i in range(0, len(pending), cfg.analyst.batch_size)
@@ -287,7 +329,16 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
                 results = future.result()
             except Exception as exc:  # noqa: BLE001 - isolate failed provider batches
                 for row in futures[future]:
-                    state(conn, row["id"], "blocked")
+                    current = conn.execute(
+                        "SELECT state FROM applications WHERE job_id=?", (row["id"],)
+                    ).fetchone()
+                    if not current or current[0] not in (
+                        "approved",
+                        "unknown_result",
+                        "submitted",
+                        "withdrawn",
+                    ):
+                        state(conn, row["id"], "blocked")
                 errors.append(type(exc).__name__)
                 continue
             for row, item, issues in results:
@@ -433,6 +484,7 @@ def render_pdf(md_text, out):
                 page.set_content(
                     f'<html><head><meta charset="utf-8"><style>{CSS}</style></head><body>{body}</body></html>'
                 )
+                private_file(out)
                 page.pdf(path=str(out), format="A4", prefer_css_page_size=True)
             finally:
                 browser.close()
