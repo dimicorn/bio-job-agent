@@ -196,17 +196,25 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
 
         deferred = None
         try:
-            steps = applier.plan(
-                fields,
-                values,
-                bank,
-                row["employer"],
-                queue,
-                {
-                    "resume": versions["resume"]["content"],
-                    "facts": [f.model_dump() for f in profile.facts],
-                },
-            )
+            try:
+                steps = applier.plan(
+                    fields,
+                    values,
+                    bank,
+                    row["employer"],
+                    queue,
+                    {
+                        "resume": versions["resume"]["content"],
+                        "facts": [f.model_dump() for f in profile.facts],
+                    },
+                )
+            finally:
+                # Show why each unfilled field needs a person, even when planning stops.
+                for item in getattr(applier, "plan_summary", []):
+                    if item["source"] == "needs_human":
+                        output(
+                            f"  Blocked: {item['field'] or 'Unlabelled field'} [{item['reason']}]"
+                        )
         except PartialPlanStop as exc:
             steps, deferred = exc.steps, exc
             for reason in exc.reasons:

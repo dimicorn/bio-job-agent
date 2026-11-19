@@ -50,23 +50,33 @@ FIELDS_JS = r"""() => {
  };
  const labelled = e => (e.getAttribute('aria-labelledby') || '').split(/\s+/)
    .map(id => text(document.getElementById(id))).filter(Boolean).join(' ');
- const label = e => labelled(e) || e.getAttribute('aria-label') ||
+ const optionLabel = e => { const ids = (e.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean); return (ids.length && text(document.getElementById(ids[ids.length-1]))) || label(e); };
+ const controlsIn = b => [...b.querySelectorAll('input,textarea,select,[role=combobox]')]
+   .filter(c => c.type !== 'hidden' && c.getAttribute('aria-hidden') !== 'true');
+ // Lever wraps the label, the control and upload/location helper text in one question box.
+ const questionLabel = e => {
+   const box = e.closest('.application-question');
+   return box && controlsIn(box).length === 1 ? text(box.querySelector('.application-label')) : '';
+ };
+ const label = e => labelled(e) || e.getAttribute('aria-label') || questionLabel(e) ||
    [...(e.labels || [])].map(labelText).join(' ') || labelText(e.closest('label'));
  const visible = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
  const seen = new Set(), out = [];
  const elements = [...document.querySelectorAll(
    'input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option],[aria-required=true],[contenteditable=true]')];
  for (const e of elements) {
+   // Hidden proxies (custom radios, react-select, Workable address parts) mirror a visible control.
+   if (e.matches('input[aria-hidden=true]:not([type=file])')) continue;
+   // Ashby's optional "autofill from resume" helper is not an application field.
+   if (e.closest('.ashby-application-form-autofill-input-root')) continue;
    if (e.matches('[data-bio-upload]') && e.querySelector('.file-upload__filename')) continue;
    if (!e.matches('input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option]') &&
        e.querySelector('input,textarea,select,[role=combobox],[role=radio],[role=checkbox],button[data-option]')) continue;
-   // React-select inserts a hidden required validation proxy next to the real combobox.
-   if (e.matches('input[aria-hidden=true]') && e.closest('.select-shell')?.querySelector('[role=combobox]')) continue;
    const type = (e.type || e.getAttribute('role') || e.tagName).toLowerCase();
    if (['hidden','submit','button','reset'].includes(type) && !e.hasAttribute('data-option')) continue;
    if (!visible(e) && !((type === 'file' || e.required || e.getAttribute('aria-required') === 'true') && visible(e.parentElement)) &&
        !((type === 'radio' || type === 'checkbox') && visible(e.closest('label')))) continue;
-   const box = e.closest('[data-field-path],fieldset,[role=group],[role=radiogroup],.application-question,.field');
+   const box = e.closest('[data-field-path],fieldset,[role=group],[role=radiogroup],.application-question,.field,[data-ui]');
    const group = ['radio','checkbox'].includes(type) || e.hasAttribute('data-option');
    const key = group ? (box || e.parentElement) : e;
    if (seen.has(key)) continue;
@@ -75,20 +85,21 @@ FIELDS_JS = r"""() => {
    let controls = [e];
    let question = label(e);
    if (group) {
-     controls = [...key.querySelectorAll('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox],button[data-option]')];
+     controls = [...key.querySelectorAll('input[type=radio],input[type=checkbox],[role=radio],[role=checkbox],button[data-option]')].filter(c => !(c.matches('input[aria-hidden=true]') && c.closest('[role=radio],[role=checkbox]')));
      question = text(key.querySelector('legend')) || labelled(key) ||
        text(key.querySelector('.application-label,.question-label')) ||
        (controls.length === 1 ? label(e) : text(key.querySelector('label')));
-     options = controls.map(c => label(c) || text(c) || c.value || c.getAttribute('data-option'));
+     options = controls.map(c => optionLabel(c) || text(c) || c.value || c.getAttribute('data-option'));
    } else if (e.tagName === 'SELECT') {
      options = [...e.options].filter(o => o.value && !o.disabled).map(o => o.text.trim());
    }
-   if (!question && box) question = labelText(box.querySelector('label'));
+   if (!question && box && controlsIn(box).length <= 1)
+     question = labelText(box.querySelector('label')) || text(box.querySelector('.application-label'));
    question ||= e.name || e.id || '';
    const token = key.getAttribute('data-bio-field') || 'bio-' + crypto.randomUUID();
    key.setAttribute('data-bio-field', token);
    const required = controls.some(c => c.required || c.getAttribute('aria-required') === 'true') ||
-     key.getAttribute('aria-required') === 'true' || /\*/.test(question) ||
+     key.getAttribute('aria-required') === 'true' || /[*\u2731]/.test(question) ||
      !!box?.querySelector('[aria-required=true],.required');
    const has_value = group ? controls.some(c => c.checked === true ||
        c.getAttribute('aria-checked') === 'true' || c.getAttribute('aria-pressed') === 'true') :
@@ -288,12 +299,16 @@ class FormApplier:
         self.queue = queue
         steps, stops, pending, deferred = [], [], [], []
         unresolved = set()
+        reasons_by_token = {}
 
-        def add(field, value, source):
+        def add(field, value, source, *, loose=False):
             wanted = value if isinstance(value, list) else [value]
             if field["options"]:
-                choices = {answers.norm(o): o for o in field["options"]}
-                wanted = [choices.get(answers.norm(v), "") for v in wanted]
+                wanted, reason = answers.match_options(field["options"], wanted, loose=loose)
+                if wanted is None:
+                    if source != "llm":
+                        reasons_by_token[field["token"]] = reason
+                    return False
             if not wanted or not all(isinstance(v, str) and v.strip() for v in wanted):
                 return False
             file_hash = (
@@ -320,6 +335,8 @@ class FormApplier:
                     continue
                 queue(label, field["options"], field["required"])
                 unresolved.add(field["token"])
+                if not value:
+                    reasons_by_token[field["token"]] = "sensitive with no stored answer"
                 consent = (
                     field["kind"] == "choices"
                     and len(field["options"]) == 1
@@ -347,10 +364,12 @@ class FormApplier:
                     "answers.yaml (approved snapshot)",
                 )
             if value:
-                if add(field, value, source):
+                # A stored preference may name its choice in the person's own words.
+                if add(field, value, source, loose=source.startswith("answers.yaml")):
                     continue
                 queue(label, field["options"], field["required"])
                 unresolved.add(field["token"])
+                reasons_by_token.setdefault(field["token"], "option not matched")
                 if field["required"]:
                     stops.append(f"Stored answer does not match options: {label}")
                 continue
@@ -419,6 +438,7 @@ class FormApplier:
                 if field["required"]:
                     stops.append(f"Unknown required question: {field['label']}")
         sources = {step.field["token"]: step.source for step in steps}
+        self.plan_summary = []
         for field in fields:
             source = sources.get(field["token"])
             if source is None:
@@ -427,7 +447,11 @@ class FormApplier:
                     if field["required"] or field["token"] in unresolved
                     else "left_blank"
                 )
-            self.event("plan", field=field["label"], source=source)
+            reason = reasons_by_token.get(field["token"]) if source == "needs_human" else None
+            if source == "needs_human" and not reason:
+                reason = "needs_human"
+            self.plan_summary.append({"field": field["label"], "source": source, "reason": reason})
+            self.event("plan", field=field["label"], source=source, reason=reason)
         if stops or deferred:
             reasons = stops + [f"Consent requires a person: {label}" for label in deferred]
             if self.cfg.apply.mode == "assisted" and steps:
@@ -462,13 +486,17 @@ class FormApplier:
             if installed:
                 step.file_observation_key = key
             node.set_input_files(values[0])
+            if isinstance(self, LeverApplier):
+                self.scope.locator(".resume-upload-working").first.wait_for(
+                    state="hidden", timeout=20000
+                )
             if installed and f.get("api_id"):
                 self.uploaded_fields[f["api_id"]] = f
         elif f["kind"] == "select":
             node.select_option(label=values)
         elif f["kind"] == "choices":
             controls = node.locator(
-                "input[type=radio],input[type=checkbox],"
+                "input[type=radio]:not([aria-hidden=true]),input[type=checkbox]:not([aria-hidden=true]),"
                 "[role=radio],[role=checkbox],button[data-option]"
             )
             wanted = {answers.norm(v) for v in values}
@@ -496,23 +524,39 @@ class FormApplier:
                 if not name or name.upper() == code:
                     raise FormStop(f"Unrecognized country code: {f['label']}")
                 step.values = values = [name]
+            place = standard_key(f) == "city" and len(values) == 1
             for value in values:
+                # Location suggestions are searched by city and read "City, Region, Country".
+                typed = value.split(",")[0].strip() if place else value
                 node.click()
                 if node.evaluate("e => e.matches('input')"):
-                    node.fill(value)
+                    # Lever searches places on key events, not on a programmatic fill.
+                    node.fill(typed[:-1] if place else typed)
+                    if place:
+                        node.press_sequentially(typed[-1:])
                     if node.get_attribute("aria-expanded") == "false":
                         node.press("ArrowDown")
-                country_suffix = (
-                    r"(?:\s*\+\d[\d -]*)?" if "country" in f["identity"].casefold().split() else ""
+                suffix = (
+                    r"(?:\s*,.*)?"
+                    if place
+                    else r"(?:\s*\+\d[\d -]*)?"
+                    if "country" in f["identity"].casefold().split()
+                    else ""
                 )
-                option = self.scope.locator("[role=option]:visible,.select__option:visible").filter(
+                option = self.scope.locator(
+                    "[role=option]:visible,.select__option:visible,.dropdown-location:visible"
+                ).filter(
                     has_text=re.compile(
-                        r"^\s*" + re.escape(value) + country_suffix + r"\s*$", re.IGNORECASE
+                        r"^\s*" + re.escape(typed) + suffix + r"\s*$", re.IGNORECASE
                     )
                 )
                 option.first.wait_for(state="visible")
+                if place and option.count() > 1:
+                    option = place_suggestion(option, value)
                 if option.count() != 1:
                     raise FormStop(f"Ambiguous option: {f['label']}")
+                if place:
+                    step.values = values = [" ".join(option.inner_text().split())]
                 if is_country:
                     signature = option.evaluate(r"""e => {
                         const flag = [...(e.querySelector('.iti__flag')?.classList || [])]
@@ -523,6 +567,10 @@ class FormApplier:
                     if signature:
                         step.country_signature = signature
                 option.click()
+                if isinstance(self, (LeverApplier, WorkableApplier, AshbyApplier)):
+                    node.evaluate(
+                        "e => { if (e.matches('input')) e.dataset.bioSelected = e.value; }"
+                    )
         else:
             if len(values) != 1:
                 raise FormStop(f"Multiple answers for text field: {f['label']}")
@@ -576,7 +624,7 @@ class FormApplier:
             got = node.evaluate("e => [...e.selectedOptions].map(o => o.text.trim())")
         elif kind == "choices":
             selected = node.locator(
-                "input[type=radio],input[type=checkbox],"
+                "input[type=radio]:not([aria-hidden=true]),input[type=checkbox]:not([aria-hidden=true]),"
                 "[role=radio],[role=checkbox],button[data-option]"
             ).evaluate_all(
                 "els => els.map(e => e.checked === true || e.getAttribute('aria-checked') === 'true' || e.getAttribute('aria-pressed') === 'true')"
@@ -601,8 +649,18 @@ class FormApplier:
               if (selected.length) return selected.map(x => (x.innerText || x.textContent).trim());
               const option = document.getElementById(e.getAttribute('aria-activedescendant'));
               if (option?.getAttribute('aria-selected') === 'true') return [option.innerText.trim()];
+              if (e.matches('input') && e.value && e.dataset.bioSelected === e.value) return [e.value];
               return [];
             }""")
+        elif standard_key(f) == "phone" and kind == "text":
+            # intl-tel-input moves the "+44" dial code out of the input into a country button.
+            got = [
+                node.evaluate("""e => {
+                  const dial = e.closest('.iti')?.querySelector('.iti__selected-dial-code');
+                  const v = e.value.trim();
+                  return dial && v && !v.startsWith('+') ? dial.innerText.trim() + ' ' + v : v;
+                }""")
+            ]
         else:
             got = [node.input_value()]
         if (
@@ -679,9 +737,49 @@ class FormApplier:
             self.page.wait_for_timeout(min(250, max(1, (deadline - time.monotonic()) * 1000)))
 
 
+COUNTRY_ALIASES = {
+    alias: code
+    for code, names in {
+        "GBR": "united kingdom|uk|gb|gbr|great britain|britain|england|scotland|wales",
+        "USA": "united states|united states of america|usa|us",
+        "CAN": "canada|can|ca",
+        "IRL": "ireland|irl|ie",
+        "DEU": "germany|deutschland|deu|de",
+        "CHE": "switzerland|che|ch",
+        "FRA": "france|fra|fr",
+        "NLD": "netherlands|nld|nl",
+        "BEL": "belgium|bel|be",
+        "AUT": "austria|aut|at",
+        "DNK": "denmark|dnk|dk",
+        "SWE": "sweden|swe|se",
+        "ESP": "spain|esp|es",
+        "ITA": "italy|ita|it",
+    }.items()
+    for alias in names.split("|")
+}
+
+
+def place_parts(place):
+    """Comma parts after the city, with country names and codes folded together."""
+    parts = [answers.norm(p) for p in place.split(",")[1:] if p.strip()]
+    return {COUNTRY_ALIASES.get(p, p) for p in parts}
+
+
+def place_suggestion(options, wanted):
+    """Narrow several "City, Region, Country" suggestions by the stored place's other parts."""
+    extra = place_parts(wanted)
+    texts = options.all_inner_texts()
+    hits = [i for i, t in enumerate(texts) if extra and extra <= place_parts(t)]
+    if len(hits) != 1:
+        raise FormStop(f"Location suggestion is ambiguous for '{wanted}'; choose it in the browser")
+    return options.nth(hits[0])
+
+
 def standard_key(field):
+    if field.get("standard"):
+        return field["standard"]
     label = answers.norm(field["label"])
-    identity = re.sub("[^a-z]", "", field["identity"].casefold())
+    identities = {re.sub("[^a-z]", "", part.casefold()) for part in field["identity"].split()}
     aliases = {
         "first_name": ("first name", "given name", "firstname"),
         "last_name": ("last name", "family name", "surname", "lastname"),
@@ -696,7 +794,7 @@ def standard_key(field):
         "website": ("website", "website url", "personal website", "portfolio"),
     }
     for key, names in aliases.items():
-        if label in names or identity in {re.sub("[^a-z]", "", n) for n in names}:
+        if label in names or identities & {re.sub("[^a-z]", "", n) for n in names}:
             return key
     return None
 
@@ -770,6 +868,13 @@ class GreenhouseApplier(FormApplier):
 
 
 class LeverApplier(FormApplier):
+    def fields(self):
+        fields = super().fields()
+        for field in fields:
+            if field["kind"] == "text" and "location" in field["identity"].casefold().split():
+                field["kind"] = "combo"
+        return fields
+
     SUBMIT = "#btn-submit"
 
     def form_url(self, url):
@@ -777,6 +882,21 @@ class LeverApplier(FormApplier):
 
 
 class WorkableApplier(FormApplier):
+    def open(self, url):
+        super().open(url)
+        # The cookie banner covers the lower form; decline optional cookies only.
+        decline = self.scope.locator("[data-ui=cookie-consent-decline]")
+        if decline.count() == 1 and decline.is_visible():
+            decline.click()
+
+    def fields(self):
+        fields = super().fields()
+        for field in fields:
+            # Workable prefills Address from the visitor's IP; plan it from the profile city.
+            if field["kind"] == "text" and "address" in field["identity"].split():
+                field["standard"] = "city"
+        return fields
+
     SUBMIT = "[data-ui=apply-button]"
 
     def form_url(self, url):

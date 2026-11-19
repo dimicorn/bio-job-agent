@@ -11,7 +11,46 @@ from app.resume import require_reviewed
 
 
 def norm(label):
-    return re.sub(r"\s+", " ", label.replace("*", "")).strip().casefold().rstrip(" ?:.")
+    return re.sub(r"\s+", " ", re.sub(r"[*\u2731]", "", label)).strip().casefold().rstrip(" ?:.")
+
+
+def _words(text):
+    return re.findall(r"[a-z0-9]+", norm(text))
+
+
+def match_options(options, values, *, loose=False):
+    """Map stored answers onto listed options by normalised text.
+
+    Returns (matched, reason); matched is None when any answer cannot be mapped.
+    An exact normalised label always wins. With ``loose`` (non-sensitive questions only),
+    a stored answer may also match the single option whose words contain it, or whose
+    words it contains; an answer that fits several options stays unmatched.
+    """
+    choices = {norm(o): o for o in options}
+    matched = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            return None, "empty stored answer"
+        exact = choices.get(norm(value))
+        if exact:
+            matched.append(exact)
+            continue
+        want = _words(value)
+        hits = []
+        if loose and want:
+
+            def within(small, big):
+                n = len(small)
+                return any(big[i : i + n] == small for i in range(len(big) - n + 1))
+
+            hits = [o for o in options if within(want, _words(o)) or within(_words(o), want)]
+        if len(hits) == 1:
+            matched.append(hits[0])
+            continue
+        if len(hits) > 1:
+            return None, f"option not matched: '{value}' fits {len(hits)} options"
+        return None, f"option not matched: '{value}' is not a listed option"
+    return matched, None
 
 
 def load_answers(cfg):
@@ -30,7 +69,9 @@ def load_answers(cfg):
 
 
 def lookup(bank, employer, label):
-    return bank.get(norm(f"{employer}: {label}"), bank.get(norm(label)))
+    # Accept both normalized snapshots and user-authored mappings at this boundary.
+    normalized = {norm(k): v for k, v in bank.items()}
+    return normalized.get(norm(f"{employer}: {label}"), normalized.get(norm(label)))
 
 
 def save_answer(cfg, label, value, employer=None):
@@ -74,11 +115,13 @@ def plan(cfg, conn, row):
         values = value if isinstance(value, list) else [value] if value else []
         if not all(v.strip() for v in values):
             values = []
-        if options:
-            choices = {o.casefold(): o for o in options}
-            values = [choices.get(v.casefold(), "") for v in values]
-            if not all(values):
-                values = []
+        if options and values:
+            from app.applier import SENSITIVE
+
+            values, _ = match_options(
+                options, values, loose=not SENSITIVE.search(question["label"])
+            )
+            values = values or []
         items.append(
             {
                 "question": question["label"],

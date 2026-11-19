@@ -6,7 +6,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from app import answers, applications, autopilot, materials, resume
-from app.applier import APPLIERS
+from app.applier import APPLIERS, FormStop
 from app.pipeline.discover import discover
 from app.settings import Apply, Settings
 from app.store import list_jobs
@@ -163,7 +163,11 @@ def test_safety_stops_even_with_known_answer(prepared, conn, page, ats, extra, r
 def test_unknown_required_question_goes_to_answers(prepared, conn, page, ats):
     cfg, profile, row = approve(prepared, conn, ats)
     mock_form(page, ats, extra="<label>Novel required question *<input required></label>")
-    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
+    out = []
+    assert (
+        autopilot.apply_one(cfg, conn, profile, row, page, output=out.append) == "manual_required"
+    )
+    assert "  Blocked: Novel required question * [needs_human]" in out
     assert page.evaluate("window.__submissions") == 0
     question = conn.execute(
         "SELECT * FROM screening_questions WHERE job_id=?", (row["id"],)
@@ -879,3 +883,174 @@ def test_interrupted_apply_reports_uncertain_state(prepared, conn, monkeypatch):
         autopilot.run(cfg, conn, profile, [row], browser_factory=Browser, output=output.append)
     assert "unknown_result" in output[-1]
     assert "Reconcile uncertain submissions manually" in output[-1]
+
+
+SUGGEST = """<script>
+function suggest(input, list, cls) {
+  list.innerHTML = '';
+  for (const place of ['London, England, United Kingdom', 'London, Ontario, Canada']) {
+    if (!place.toLowerCase().startsWith(input.value.toLowerCase())) continue;
+    const item = document.createElement('div');
+    item.className = cls; item.setAttribute('role', cls ? 'presentation' : 'option');
+    item.textContent = place;
+    item.onclick = () => { input.value = place; list.innerHTML = ''; };
+    list.appendChild(item);
+  }
+}
+</script>"""
+
+PROVIDER_MARKUP = {
+    # Lever: label box with helper text, custom "card" questions, location suggestions.
+    "lever": """<li class="application-question"><label><div class="application-label">Current location</div>
+      <div class="application-field"><input name="location" id="location-input"
+        oninput="suggest(this, document.querySelector('.dropdown-results'), 'dropdown-location')">
+      <input type="hidden" name="selectedLocation"><div class="dropdown-container">
+      <div class="dropdown-results"></div>
+      <div class="dropdown-no-results">No location found. Try entering a different location</div></div></div></label></li>
+      <li class="application-question custom-question"><div class="application-label"><div class="text">
+      Which assays have you run?<span class="required">\u2731</span></div></div>
+      <div class="application-field"><textarea name="cards[abc][field0]"></textarea></div></li>
+      <div class="resume-upload-working" hidden></div>""",
+    # Workable: IP-prefilled address with hidden part proxies, data-ui radio group
+    # with nested hidden inputs, combobox listbox and a cookie overlay.
+    "workable": """<span id="address_label">Address</span>
+      <input id="address" name="address" data-ui="address" aria-labelledby="address_label" value="Vienna, Austria">
+      <div data-role="illustrated-input"><div><input id="city" name="city" aria-hidden="true" tabindex="-1"></div></div>
+      <div><input id="postcode" name="postcode" aria-hidden="true" tabindex="-1"></div>
+      <div role="group" data-ui="QA_1" aria-labelledby="q1" aria-required="true">
+      <span id="q1">Are you willing to relocate? *</span><span id="q1y">Yes</span><span id="q1n">No</span>
+      <div role="radio" aria-labelledby="q1 q1y" aria-checked="false"
+        onclick="this.parentElement.querySelectorAll('[role=radio]').forEach(r => r.setAttribute('aria-checked', r === this))">
+        <input type="radio" aria-hidden="true" tabindex="-1"></div>
+      <div role="radio" aria-labelledby="q1 q1n" aria-checked="false"
+        onclick="this.parentElement.querySelectorAll('[role=radio]').forEach(r => r.setAttribute('aria-checked', r === this))">
+        <input type="radio" aria-hidden="true" tabindex="-1"></div></div>
+      <div data-ui="QA_2"><span id="degree_label">Highest degree</span>
+      <input role="combobox" name="QA_2" aria-labelledby="degree_label" aria-controls="input_QA_2_listbox"
+        aria-expanded="false" onkeydown="document.getElementById('input_QA_2_listbox').hidden=false"
+        oninput="document.getElementById('input_QA_2_listbox').hidden=false">
+      <div id="input_QA_2_listbox" role="listbox" hidden>
+      <div role="option" onclick="const i=document.querySelector('[name=QA_2]'); i.value=this.textContent; this.parentElement.hidden=true">PhD</div>
+      <div role="option" onclick="const i=document.querySelector('[name=QA_2]'); i.value=this.textContent; this.parentElement.hidden=true">MSc</div></div></div>
+      <div style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#fff">
+      <button type="button" data-ui="cookie-consent-decline" onclick="this.parentElement.remove()">Decline</button></div>""",
+    # Ashby: resume autofill helper, field paths, yes/no buttons, location combobox.
+    "ashby": """<div class="ashby-application-form-autofill-input-root"><input type="file"></div>
+      <div data-field-path="_systemfield_location"><label for="loc">Location</label>
+      <input id="loc" role="combobox" oninput="suggest(this, document.getElementById('places'), '')"></div>
+      <div id="places" role="listbox"></div>
+      <div data-field-path="0f1e"><label>Can you work from our London office 3 days a week? *</label><div>
+      <button type="button" data-option="yes" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true')">Yes</button>
+      <button type="button" data-option="no" aria-pressed="false" onclick="this.setAttribute('aria-pressed','true')">No</button></div></div>""",
+}
+
+PROVIDER_EXPECTED = {
+    "lever": {
+        "Current location": "city",
+        "Which assays have you run?\u2731": "answers.yaml (approved snapshot)",
+    },
+    "workable": {
+        "Address": "city",
+        "Are you willing to relocate? *": "answers.yaml (approved snapshot)",
+        "Highest degree": "answers.yaml (approved snapshot)",
+    },
+    "ashby": {
+        "Location": "city",
+        "Can you work from our London office 3 days a week? *": "answers.yaml (approved snapshot)",
+    },
+}
+
+
+@pytest.mark.parametrize("ats", ["lever", "workable", "ashby"])
+def test_provider_widgets_plan_and_dry_fill_never_submit(prepared, page, ats, tmp_path):
+    cfg, _, _ = prepared
+    page.route(
+        "**/*",
+        lambda route: route.fulfill(
+            body=(FORMS / f"{ats}.html")
+            .read_text()
+            .replace("<!--EXTRA-->", PROVIDER_MARKUP[ats])
+            .replace("/*RESULT*/", "")
+            .replace("</body>", SUGGEST + "</body>"),
+            content_type="text/html; charset=utf-8",
+        ),
+    )
+    applier = APPLIERS[ats](page, cfg)
+    applier.open(URLS[ats])
+    if ats == "workable":
+        assert page.locator("[data-ui=cookie-consent-decline]").count() == 0
+    fields = applier.fields()
+    labels = [f["label"] for f in fields]
+    # Hidden proxies and helper inputs are not fields; noisy helper text is not a label.
+    assert "" not in labels and not any("No location found" in label for label in labels)
+    assert not any(label.startswith("cards[") for label in labels)
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-synthetic")
+    values = {
+        "first_name": "Alex",
+        "last_name": "Example",
+        "full_name": "Alex Example",
+        "email": "alex@example.org",
+        "city": "London, United Kingdom",
+        "resume": str(resume),
+        "letter": "Synthetic letter about cell assays.",
+    }
+    bank = {
+        "Research focus": "Cell assays",
+        "Which assays have you run?": "Cell viability",
+        "Are you willing to relocate?": "yes",
+        "Highest degree": "PhD",
+        "Can you work from our London office 3 days a week?": "Yes",
+    }
+    steps = applier.plan(fields, values, bank, "Example", lambda *x: None)
+    summary = {row["field"]: row["source"] for row in applier.plan_summary}
+    for label, source in PROVIDER_EXPECTED[ats].items():
+        assert summary[label] == source
+    assert not [row for row in applier.plan_summary if row["source"] == "needs_human"]
+    for step in steps:
+        applier.fill_one(step)
+    place = next(s for s in steps if s.source == "city")
+    expected_place = (
+        "London, United Kingdom" if ats == "workable" else "London, England, United Kingdom"
+    )
+    assert place.values == [expected_place]
+    applier.verify(steps)
+    assert page.evaluate("window.__submissions") == 0
+
+
+def test_ambiguous_location_suggestion_stops(prepared, page):
+    cfg, _, _ = prepared
+    page.route(
+        "**/*",
+        lambda route: route.fulfill(
+            body=(FORMS / "lever.html")
+            .read_text()
+            .replace("<!--EXTRA-->", PROVIDER_MARKUP["lever"])
+            .replace("</body>", SUGGEST + "</body>"),
+            content_type="text/html; charset=utf-8",
+        ),
+    )
+    applier = APPLIERS["lever"](page, cfg)
+    applier.open(URLS["lever"])
+    location = next(f for f in applier.fields() if f["label"] == "Current location")
+    (step,) = applier.plan([location], {"city": "London"}, {}, "Example", lambda *x: None)
+    with pytest.raises(FormStop, match="ambiguous"):
+        applier.fill_one(step)
+    assert page.evaluate("window.__submissions") == 0
+
+
+def test_workable_nested_radio_inputs_are_not_duplicate_fields(prepared, page):
+    cfg, _, _ = prepared
+    html = """<form><div role="group" data-ui="work" aria-labelledby="question">
+    <span id="question">Right to work?</span><span id="yes">Yes</span><span id="no">No</span>
+    <div role="radio" aria-labelledby="question yes" aria-checked="false" onclick="this.setAttribute('aria-checked','true')"><input type="radio" aria-hidden="true" required></div>
+    <div role="radio" aria-labelledby="question no" aria-checked="false"><input type="radio" aria-hidden="true"></div></div></form>"""
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+    applier = APPLIERS["workable"](page, cfg)
+    applier.open("https://apply.workable.com/example/j/123")
+    fields = applier.fields()
+    assert len(fields) == 1
+    assert fields[0]["options"] == ["Yes", "No"]
+    steps = applier.plan(fields, {}, {"right to work": "Yes"}, "Example", lambda *x: None)
+    applier.fill_one(steps[0])
+    assert page.locator("[role=radio]").first.get_attribute("aria-checked") == "true"

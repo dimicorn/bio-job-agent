@@ -191,7 +191,13 @@ uv run bio-jobs answers                  # interactively fill unanswered questio
 ```
 
 `answers.yaml` is a private, editable answer bank; start with `answers.example.yaml`.
-Question matching ignores case, required markers and trailing punctuation. Answers are
+Question matching ignores case, required markers (`*`, Lever's `✱`) and trailing
+punctuation. Stored answers are matched to listed options by normalised text. For
+non-sensitive questions such as office or location preferences, an answer written in your
+own words also counts when exactly one option contains it (or it contains exactly one
+option); an answer that fits several options, such as `London` against both "based in the
+UK… London" and "willing to relocate… London", stays `needs_human` with that reason.
+Sensitive questions need the exact option text. Answers are
 reused across employers when their options match. An `Employer: Question` key overrides
 a shared answer. If a shared answer does not fit another employer's options, the interactive
 command saves the replacement for that employer. Enter option numbers separated by commas
@@ -251,8 +257,13 @@ then waits up to `submit_wait_minutes` for you to press Submit and for an acknow
 `auto` presses Submit once, then waits up to `confirmation_timeout_seconds` for an
 acknowledgement. Both browser modes support Greenhouse (including embedded forms), Lever,
 Workable and Ashby when its board is enabled. Standard HTML controls, common React-select
-controls, Workable choice groups and Ashby choice buttons are supported. Changed or
-unsupported widgets stop for manual handling. No live employer submissions are part of testing.
+controls, Workable `data-ui` choice groups and listboxes (the optional-cookie banner is
+declined), Ashby field paths, yes/no buttons and location menus, and Lever question labels,
+custom card questions and resume upload parsing are supported. Location suggestions are
+typed by city and must narrow to one suggestion by the profile city's region or country
+(names and codes such as `United Kingdom`/`GBR` are equivalent); otherwise the job stops for
+you to choose. Workable's IP-prefilled Address is replaced with the profile city.
+Changed or unsupported widgets stop for manual handling. No live employer submissions are part of testing.
 
 Greenhouse questions are fetched from its public job-board API with robots checks and
 request pacing, then matched to the embedded application form. A mismatch stops the job.
@@ -264,8 +275,9 @@ Options must match the form. Visa, work authorization, legal declarations, demog
 assessments are never answered by the LLM: only stored answers may fill them, and optional
 demographic questions remain blank.
 
-The plan prints each answer and its source before filling, and records sources in the audit
-log. In assisted mode, review LLM answers in the browser before pressing Submit. In auto
+The plan prints each answer and its source before filling, prints each blocked field as
+`Blocked: <question> [reason]` (sensitive with no stored answer, `needs_human`, or option
+not matched with the stored value), and records sources and reasons in the audit log. In assisted mode, review LLM answers in the browser before pressing Submit. In auto
 mode, a required free-text LLM answer stops the application unless `auto_llm_answers` is
 explicitly enabled. After confirmation, use `bio-jobs answers` to save any accepted LLM
 answers yourself; they are never saved automatically. Unknown required questions,

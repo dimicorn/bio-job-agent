@@ -253,6 +253,16 @@ def test_answer_bank_normalization_employer_options_and_sensitive_missing(prepar
     assert cfg.apply.answers_file.stat().st_mode & 0o777 == 0o600
 
 
+def test_snapshot_uses_stored_preference_matched_by_normalised_text(preparation, conn):
+    cfg, _, rows = preparation
+    row = rows[0]
+    options = ["I'm based in the UK and happy to work in London", "I would relocate to Oxford"]
+    answers.add_question(conn, row["id"], "Which office would you prefer? *", options)
+    answers.save_answer(cfg, "Which office would you prefer?*", "  HAPPY to work in London ")
+    item = answers.plan(cfg, conn, row)[0]
+    assert item["answer"] == [options[0]] and item["source"] == "answers.yaml"
+
+
 def test_answers_reuse_across_employers(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     for row in rows:
