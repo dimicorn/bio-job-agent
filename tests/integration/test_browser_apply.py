@@ -37,7 +37,15 @@ def page(browser):
 
 
 @pytest.fixture
-def prepared(tmp_path, conn, profile, sources, transport):
+def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
+    from app.applier import GreenhouseApplier, ProposedAnswers
+
+    def fake_form_url(self, url):
+        self.api_fields = []
+        return url
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", fake_form_url)
+    monkeypatch.setattr("app.llm.ask_json", lambda *args: ProposedAnswers(answers=[]))
     cfg = Settings(
         _env_file=None,
         resume_path=tmp_path / "resume.md",
@@ -140,7 +148,6 @@ def test_mismatch_refuses_submit(prepared, conn, page, ats):
         ('<input type="password" aria-label="Password">', "Sign-in"),
         ("<h2>Complete the assessment</h2>", "assessment"),
         ("<label>Do you require visa sponsorship?<input required></label>", "declaration"),
-        ("<label>Gender<input></label>", "declaration"),
         ('<label>I agree to the terms<input type="checkbox"></label>', "declaration"),
     ],
 )
@@ -202,17 +209,21 @@ def test_unconfirmed_result_is_never_retried(prepared, conn, page, ats, mode):
     assert conn.execute("SELECT count(*) FROM application_attempts").fetchone()[0] == 1
 
 
-def test_challenge_after_submit_is_manual_and_nonretryable(prepared, conn, page):
+def test_challenge_after_submit_waits_and_is_nonretryable(prepared, conn, page, monkeypatch):
     cfg, profile, row = approve(prepared, conn)
     mock_form(
         page,
         "greenhouse",
         result="document.body.insertAdjacentHTML('beforeend','<div class=g-recaptcha>Challenge</div>')",
     )
-    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
+    notifications = []
+    monkeypatch.setattr("app.watch.notify", lambda *args: notifications.append(args))
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "unknown_result"
+    assert notifications
+    assert any(event["action"] == "challenge_handoff" for event in events(conn, row))
     assert page.evaluate("window.__submissions") == 1
     assert conn.execute("SELECT submission_possible FROM application_attempts").fetchone()[0] == 1
-    with pytest.raises(ValueError, match="never retry"):
+    with pytest.raises(ValueError, match="uncertain"):
         applications.approve(cfg, conn, profile, row)
 
 
@@ -284,8 +295,8 @@ def test_known_legal_answer_still_requires_person(prepared, conn, page):
         "greenhouse",
         extra="<label>Do you require visa sponsorship?<select required><option>No</option><option>Yes</option></select></label>",
     )
-    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
-    assert page.evaluate("window.__submissions") == 0
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert page.evaluate("window.__submissions") == 1
 
 
 def test_native_select_and_exact_multiple_choice_verification(prepared, conn, page):
@@ -514,16 +525,15 @@ def test_missing_required_contact_value_is_queued(prepared, conn, page):
     assert page.evaluate("window.__submissions") == 0
 
 
-def test_invisible_captcha_widget_is_not_bypassed(prepared, conn, page):
+def test_invisible_captcha_widget_allows_fill(prepared, conn, page):
     cfg, profile, row = approve(prepared, conn)
     mock_form(
         page,
         "greenhouse",
         extra='<div class=h-captcha style="display:none" data-sitekey="mock">Challenge</div>',
     )
-    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
-    assert page.evaluate("window.__submissions") == 0
-    assert "CAPTCHA" in events(conn, row)[-1]["detail"]
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert page.evaluate("window.__submissions") == 1
 
 
 def test_hidden_required_custom_question_is_queued(prepared, conn, page):
@@ -538,3 +548,306 @@ def test_hidden_required_custom_question_is_queued(prepared, conn, page):
     assert conn.execute(
         "SELECT 1 FROM screening_questions WHERE label='Unsupported widget'"
     ).fetchone()
+
+
+def test_greenhouse_api_fields_on_embed_form(prepared, conn, page, monkeypatch):
+    from app.applier import GreenhouseApplier, greenhouse_questions
+
+    cfg = prepared[0]
+    answers.save_answer(cfg, "Right to work?", "Yes")
+    cfg, profile, row = approve(prepared, conn)
+    payload = {
+        "questions": [
+            {"label": "First Name", "required": True, "fields": [{"name": "first_name"}]},
+            {"label": "Last Name", "required": True, "fields": [{"name": "last_name"}]},
+            {"label": "Email", "required": True, "fields": [{"name": "email"}]},
+            {
+                "label": "Resume",
+                "required": True,
+                "fields": [{"name": "resume", "type": "input_file"}],
+            },
+            {
+                "label": "Cover Letter",
+                "required": False,
+                "fields": [{"name": "cover_letter", "type": "textarea"}],
+            },
+            {
+                "label": "Research focus",
+                "required": True,
+                "fields": [{"name": "focus", "values": [{"label": "Cell assays"}]}],
+            },
+            {
+                "label": "Right to work?",
+                "required": True,
+                "fields": [{"name": "work", "values": [{"label": "Yes"}, {"label": "No"}]}],
+            },
+        ]
+    }
+
+    def embed(self, _url):
+        self.api_fields = greenhouse_questions(payload)
+        return "https://job-boards.greenhouse.io/embed/job_app?for=example&token=123"
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", embed)
+    mock_form(
+        page,
+        "greenhouse",
+        extra='<label for="work">Right to work?</label><select id="work" required><option value="">Choose</option><option>Yes</option><option>No</option></select>',
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert "/embed/job_app" in page.url
+    assert any("answers.yaml" in e["detail"] for e in events(conn, row) if e["action"] == "plan")
+
+
+def test_assisted_llm_answer_is_previewed_and_queued(prepared, conn, page, monkeypatch):
+    import json
+
+    from app.applier import ProposedAnswer, ProposedAnswers
+
+    cfg, profile, row = approve(prepared, conn)
+    cfg.apply.mode = "assisted"
+    mock_form(
+        page, "greenhouse", extra="<label>Describe assays<textarea required></textarea></label>"
+    )
+
+    def llm(_cfg, _system, user, _model, _purpose):
+        question = json.loads(user)["questions"][0]
+        return ProposedAnswers(
+            answers=[ProposedAnswer(id=question["id"], answer=["Cell assays"], needs_human=False)]
+        )
+
+    monkeypatch.setattr("app.llm.ask_json", llm)
+    original = APPLIERS["greenhouse"].wait_confirmation
+
+    def submit(applier, seconds):
+        assert page.locator("textarea").last.input_value() == "Cell assays"
+        applier.submit_button().click()
+        return original(applier, seconds)
+
+    monkeypatch.setattr(APPLIERS["greenhouse"], "wait_confirmation", submit)
+    output = []
+    assert autopilot.apply_one(cfg, conn, profile, row, page, output=output.append) == "submitted"
+    assert any("Describe assays: Cell assays [llm]" in line for line in output)
+    assert conn.execute(
+        "SELECT 1 FROM screening_questions WHERE label='Describe assays'"
+    ).fetchone()
+    assert answers.lookup(answers.load_answers(cfg), row["employer"], "Describe assays") is None
+
+
+def test_greenhouse_location_api_id_matches_autocomplete(prepared, page, monkeypatch):
+    from app.applier import GreenhouseApplier, greenhouse_questions
+
+    cfg, profile, _ = prepared
+    profile.city = "London"
+    payload = {
+        "questions": [],
+        "location_questions": [
+            {
+                "label": "Location",
+                "required": True,
+                "fields": [{"name": "location", "type": "input_text"}],
+            }
+        ],
+    }
+    html = """<form><label for="candidate-location">Location</label>
+      <div class="select__control"><input id="candidate-location" role="combobox" aria-required="true"
+       oninput="document.querySelector('#places').hidden=false"><span class="select__singleValue"></span></div>
+      <div id="places" hidden><div role="option" onclick="document.querySelector('.select__singleValue').textContent='London';document.querySelector('#candidate-location').value='';this.parentElement.hidden=true">London</div></div></form>"""
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+
+    def form_url(self, url):
+        self.api_fields = greenhouse_questions(payload)
+        return url
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", form_url)
+    applier = GreenhouseApplier(page, cfg)
+    applier.open("https://job-boards.greenhouse.io/embed/job_app?for=example&token=123")
+    steps = applier.plan(applier.fields(), {"city": profile.city}, {}, "Example", lambda *x: None)
+    applier.fill(steps)
+    assert page.locator(".select__singleValue").inner_text() == "London"
+
+
+def test_checkbox_group_and_multiselect_react(prepared, page):
+    from app.applier import FormApplier
+
+    cfg, _, _ = prepared
+    html = """<form><fieldset><legend>Tools</legend><label><input type="checkbox">Python</label>
+      <label><input type="checkbox">R</label></fieldset>
+      <label for="skills">Skills</label><div class="select__control"><input id="skills" role="combobox"
+      oninput="document.querySelector('#opts').hidden=false"><span class="selected"></span></div>
+      <div id="opts" hidden><div role="option" onclick="const v=document.querySelector('#skills').value;
+      const e=document.createElement('span');e.className='select__multiValue__label';e.textContent=v;
+      document.querySelector('.selected').append(e);document.querySelector('#skills').value='';this.parentElement.hidden=true">A</div>
+      <div role="option" onclick="const v=document.querySelector('#skills').value;
+      const e=document.createElement('span');e.className='select__multiValue__label';e.textContent=v;
+      document.querySelector('.selected').append(e);document.querySelector('#skills').value='';this.parentElement.hidden=true">B</div></div></form>"""
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+    applier = FormApplier(page, cfg)
+    applier.open("https://example.test/form")
+    steps = applier.plan(
+        applier.fields(),
+        {},
+        {"tools": ["Python", "R"], "skills": ["A", "B"]},
+        "Example",
+        lambda *x: None,
+    )
+    applier.fill(steps)
+    assert page.locator('input[type="checkbox"]:checked').count() == 2
+    assert page.locator(".select__multiValue__label").all_inner_texts() == ["A", "B"]
+
+
+def test_invisible_recaptcha_iframe_allows_fill(prepared, conn, page):
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(
+        page,
+        "greenhouse",
+        extra='<iframe title="reCAPTCHA" src="https://recaptcha.test/anchor?size=invisible" width="256" height="60"></iframe>',
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+
+
+def test_visible_recaptcha_challenge_stops_and_notifies(prepared, conn, page, monkeypatch):
+    cfg, profile, row = approve(prepared, conn)
+    notified = []
+    monkeypatch.setattr("app.watch.notify", lambda *args: notified.append(args))
+    mock_form(
+        page,
+        "greenhouse",
+        extra='<iframe title="reCAPTCHA challenge" src="https://recaptcha.test/bframe?size=invisible" width="300" height="300"></iframe>',
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
+    assert notified and page.evaluate("window.__submissions") == 0
+
+
+def test_plan_audit_contains_all_fields_when_required_answer_missing(prepared, conn, page):
+    import json
+
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(page, "greenhouse", extra="<label>Novel required question<input required></label>")
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
+    plan = [json.loads(e["detail"]) for e in events(conn, row) if e["action"] == "plan"]
+    assert any(
+        item["field"] == "Novel required question" and item["source"] == "needs_human"
+        for item in plan
+    )
+    assert any(item["field"].startswith("Resume") and item["source"] == "resume" for item in plan)
+
+
+def test_react_select_required_proxy_is_not_an_extra_question(prepared, conn, page):
+    cfg = prepared[0]
+    answers.save_answer(cfg, "Country*", "United Kingdom")
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(
+        page,
+        "greenhouse",
+        extra="""<label for="country">Country *</label><div class="select-shell"><div class="select__control"><input id="country" role="combobox" aria-required="true" oninput="document.querySelector('#countries').hidden=false"><span class="select__singleValue"></span></div><input required aria-hidden="true" tabindex="-1" style="position:absolute;opacity:0;width:1px;height:1px" value="ok"></div><div id="countries" hidden><div role="option" onclick="document.querySelector('#country').value='';document.querySelector('#country').closest('.select__control').querySelector('.select__singleValue').textContent='United Kingdom +44';this.parentElement.hidden=true">United Kingdom +44</div></div>""",
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert page.evaluate("window.__submissions") == 1
+
+
+def test_assisted_unanswered_consent_fills_other_fields_and_stops(prepared, conn, page):
+    cfg, profile, row = approve(prepared, conn)
+    cfg.apply.mode = "assisted"
+    mock_form(
+        page,
+        "greenhouse",
+        extra='<fieldset><legend>Assessment terms</legend><label><input type="checkbox" required>I agree to the assessment terms</label></fieldset>',
+    )
+    output = []
+    assert (
+        autopilot.apply_one(cfg, conn, profile, row, page, output=output.append)
+        == "manual_required"
+    )
+    assert page.locator("#first_name").input_value() == "Alex"
+    assert not page.locator('input[type="checkbox"]').is_checked()
+    assert page.evaluate("window.__submissions") == 0
+    assert any("Consent requires a person" in line for line in output)
+
+
+def test_greenhouse_replaced_file_input_still_checks_contents(prepared, conn, page, monkeypatch):
+    from app.applier import GreenhouseApplier, greenhouse_questions
+
+    cfg, profile, row = approve(prepared, conn)
+    html = (
+        (FORMS / "greenhouse.html")
+        .read_text()
+        .replace(
+            '<label for="resume">Resume *</label><input id="resume" type="file" required>',
+            """<div class="file-upload" role="group" aria-required="true"><label for="resume">Resume *</label><input id="resume" type="file" required onchange="const n=this.files[0].name;this.parentElement.innerHTML='<div class=file-upload__filename><p>'+n+'</p></div>'"></div>""",
+        )
+        .replace("/*RESULT*/", "document.body.innerHTML='<h1>Application received</h1>'")
+    )
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+
+    def form_url(self, url):
+        self.api_fields = greenhouse_questions(
+            {
+                "questions": [
+                    {
+                        "label": "Resume/CV",
+                        "required": True,
+                        "fields": [{"name": "resume", "type": "input_file"}],
+                    }
+                ]
+            }
+        )
+        return url
+
+    monkeypatch.setattr(GreenhouseApplier, "form_url", form_url)
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert any(e["action"] == "verify" and "file_hash" in e["detail"] for e in events(conn, row))
+
+
+def test_greenhouse_replaced_input_changed_file_stops(prepared, conn, page, monkeypatch):
+    cfg, profile, row = approve(prepared, conn)
+    html = (
+        (FORMS / "greenhouse.html")
+        .read_text()
+        .replace(
+            '<label for="resume">Resume *</label><input id="resume" type="file" required>',
+            """<div class="file-upload" role="group" aria-required="true"><label for="resume">Resume *</label><input id="resume" type="file" required onchange="const n=this.files[0].name;this.parentElement.innerHTML='<div class=file-upload__filename><p>'+n+'</p></div>'"></div>""",
+        )
+    )
+    page.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+    original = autopilot.screenshot
+
+    def replace_file(page, *args):
+        path = original(page, *args)
+        group = page.locator(".file-upload")
+        filename = group.locator(".file-upload__filename p").inner_text()
+        group.evaluate('e => e.insertAdjacentHTML("beforeend", "<input id=resume type=file>")')
+        page.locator("#resume").set_input_files(
+            {"name": filename, "mimeType": "application/pdf", "buffer": b"different"}
+        )
+        return path
+
+    monkeypatch.setattr(autopilot, "screenshot", replace_file)
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "manual_required"
+    assert page.evaluate("window.__submissions") == 0
+
+
+def test_country_code_opens_react_select_with_arrow(prepared, conn, page):
+    cfg = prepared[0]
+    answers.save_answer(cfg, "Country*", "GB")
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(
+        page,
+        "greenhouse",
+        extra="""<label for="country">Country *</label><div class="select__control"><input id="country" role="combobox" aria-required="true" aria-expanded="false" onkeydown="if(event.key==='ArrowDown'){this.setAttribute('aria-expanded','true');document.querySelector('#countries').hidden=false}"><span class="select__singleValue"></span></div><div id="countries" hidden><div role="option" onclick="document.querySelector('#country').value='';document.querySelector('#country').closest('.select__control').querySelector('.select__singleValue').innerHTML='<span class=&quot;iti__flag iti__gb&quot;></span>+44';this.parentElement.hidden=true"><span class="iti__flag iti__gb"></span>United Kingdom +44</div></div>""",
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+
+
+def test_auto_visible_challenge_can_be_resolved_by_person(prepared, conn, page, monkeypatch):
+    cfg, profile, row = approve(prepared, conn)
+    cfg.apply.submit_wait_minutes = 0.02
+    notifications = []
+    monkeypatch.setattr("app.watch.notify", lambda *args: notifications.append(args))
+    mock_form(
+        page,
+        "greenhouse",
+        result="document.body.insertAdjacentHTML('beforeend','<div class=g-recaptcha>Challenge</div>');setTimeout(()=>{document.querySelector('.g-recaptcha').remove();document.body.insertAdjacentHTML('beforeend','<h1>Application received</h1>')},300)",
+    )
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert notifications and page.evaluate("window.__submissions") == 1

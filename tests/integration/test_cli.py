@@ -150,7 +150,7 @@ def test_setup_reuses_profile_config_and_secret(configured, monkeypatch):
     cfg.config_path.unlink()
     monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
     # command primary; no fallback; a tiny check is mocked.
-    answers = iter(["9", "/bin/echo", "1", "1", "", "", "", ""])
+    answers = iter(["9", "/bin/echo", "1", "1", "", "", "", "", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     checks = []
     monkeypatch.setattr(
@@ -164,7 +164,7 @@ def test_setup_reuses_profile_config_and_secret(configured, monkeypatch):
     monkeypatch.delenv("BIO_TEST_KEY", raising=False)
     assert cfg.secret("BIO_TEST_KEY") == "secret-$-value"
     assert cfg.env_path.stat().st_mode & 0o777 == 0o600
-    answers = iter(["n", "n"])
+    answers = iter(["n", "n", "n"])
     assert wizard.setup(cfg)
     assert cfg.config_path.read_text() == original
     assert cfg.candidate_path.read_text() == profile
@@ -181,7 +181,9 @@ def test_wizard_saves_api_keys_and_fallback(configured, monkeypatch):
     monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr(wizard.getpass, "getpass", lambda _: "fake-key-for-offline-test")
-    answers = iter(["1", "", "6", "deepseek", "my-pi-model", "2", "7", "3", "85", "0,24"])
+    answers = iter(
+        ["1", "", "6", "deepseek", "my-pi-model", "2", "7", "3", "85", "0,24", "", "", ""]
+    )
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     checks = []
     monkeypatch.setattr(

@@ -63,6 +63,8 @@ class Search(BaseModel):
 class Apply(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["manual", "assisted", "auto"] = "manual"
+    auto_consent: bool = False
+    auto_llm_answers: bool = False
     company_cooldown_days: int = Field(default=30, ge=0)
     daily_limit: int = Field(default=5, ge=1, le=1000)
     max_per_run: int = Field(default=5, ge=1, le=1000)

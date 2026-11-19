@@ -188,8 +188,8 @@ Question matching ignores case, required markers and trailing punctuation. Answe
 reused across employers when their options match. An `Employer: Question` key overrides
 a shared answer. If a shared answer does not fit another employer's options, the interactive
 command saves the replacement for that employer. Enter option numbers separated by commas
-for multiple selections; Enter leaves the question unanswered. Legal, visa, salary,
-demographic and all other unknown answers stay `needs_human` until you supply them.
+for multiple selections; Enter leaves the question unanswered. Sensitive declarations and
+unsupported questions stay `needs_human` until you supply them.
 Screening draft snapshots retain the actual questions, selected answers and their source.
 
 Review keeps `o` open, `s` save, `r` reject, `l` later, `v` score override and `q` quit.
@@ -218,6 +218,8 @@ The setup wizard persists these settings in your local `config.yaml`:
 ```yaml
 apply:
   mode: manual       # manual | assisted | auto
+  auto_consent: false
+  auto_llm_answers: false
   daily_limit: 5
   max_per_run: 5
   min_score: 80
@@ -245,13 +247,29 @@ Workable and Ashby when its board is enabled. Standard HTML controls, common Rea
 controls, Workable choice groups and Ashby choice buttons are supported. Changed or
 unsupported widgets stop for manual handling. No live employer submissions are part of testing.
 
-Identity/contact fields come from the reviewed profile and approved CV; missing contact
-values and screening answers require explicit entries in `answers.yaml`. The approved
-answer bank is pinned too. Unknown required questions, mismatches, legal/visa/demographic
-questions (even with saved answers), assessments, sign-in, MFA and CAPTCHA stop the job as
-`manual_required`, with the reason recorded. The browser stays open for a person; no
-challenge is solved or bypassed. Unknown optional questions are queued and left blank; an unapproved prefilled value stops the job.
-After answering a newly discovered question, rebuild `answers` and approve again.
+Greenhouse questions are fetched from its public job-board API with robots checks and
+request pacing, then matched to the embedded application form. A mismatch stops the job.
+The shared planner uses profile contacts and links, the approved CV and cover letter, then
+employer-specific or global `answers.yaml` entries. Optional single-option consent can be
+enabled with `auto_consent`. It then asks the configured LLM once for remaining questions,
+using the approved CV, reviewed facts and stored answers; unsupported questions are queued.
+Options must match the form. Visa, work authorization, legal declarations, demographics and
+assessments are never answered by the LLM: only stored answers may fill them, and optional
+demographic questions remain blank.
+
+The plan prints each answer and its source before filling, and records sources in the audit
+log. In assisted mode, review LLM answers in the browser before pressing Submit. In auto
+mode, a required free-text LLM answer stops the application unless `auto_llm_answers` is
+explicitly enabled. After confirmation, use `bio-jobs answers` to save any accepted LLM
+answers yourself; they are never saved automatically. Unknown required questions,
+mismatches, sign-in, MFA and visible CAPTCHA challenges stop the job as `manual_required`.
+Invisible background CAPTCHA widgets do not block filling. If a visible challenge appears after
+an automatic submission, the agent notifies you and waits for confirmation while you handle it.
+The browser stays open for a person; no challenge is bypassed. In assisted mode an unanswered
+single-option legal consent is left for the person after the other supported fields are filled;
+the application stops for manual completion. Unknown optional questions are queued and left
+blank; an unapproved prefilled value stops the job. After answering a newly discovered
+question, rebuild `answers` and approve again.
 
 Browser modes recheck approval, material integrity, the higher of analyst/apply score
 thresholds and local active hours before submission. Daily slots are reserved atomically
