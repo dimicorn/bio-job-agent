@@ -11,7 +11,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from app.candidate.profile import load_profile
+from app.candidate.profile import load_profile, require_name
 from app.llm import check, fallback_cfg
 from app.settings import Settings
 from app.sources.config import load_sources
@@ -40,6 +40,10 @@ def run(cfg: Settings, *, online=False) -> int:
         report("LLM config", False, "Run uv run bio-jobs setup")
     try:
         profile = load_profile(cfg.resolved(cfg.candidate_path))
+        try:
+            require_name(profile)
+        except ValueError as exc:
+            rows.append(("Candidate name", "WARN", str(exc)))
         rows.append(
             (
                 "Profile",

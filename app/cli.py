@@ -601,6 +601,12 @@ def _run(args, cfg):
                 target = target.with_name("candidate.yaml")
             if target.exists() and not args.force:
                 raise ValueError(f"{target} exists; choose --output or --force to replace it")
+            if target.exists() and args.force:
+                existing = load_profile(target)
+                if existing.name.strip() and existing.name.strip().casefold() != "example candidate":
+                    profile = profile.model_copy(
+                        update={"name": existing.name, "name_evidence": existing.name_evidence}
+                    )
             extracted = extract_profile(cfg, conn, profile)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w" if args.force else "x", encoding="utf-8") as output:

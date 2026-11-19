@@ -104,6 +104,9 @@ def finish(conn, row, attempt, status, reason):
 
 
 def values_for(conn, profile, ids):
+    from app.candidate.profile import require_name
+
+    require_name(profile)
     versions = {
         kind: dict(
             conn.execute("SELECT * FROM material_versions WHERE id=?", (version,)).fetchone()

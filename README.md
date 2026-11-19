@@ -59,7 +59,7 @@ Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` a
 | `doctor [--online]` | Local setup and source health; opt in to live LLM checks |
 | `firms [--validate]` | List the reviewed employer watchlist; explicitly reverify public boards with `--validate` |
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
-| `extract-profile [--output path] [--force]` | Extract resume facts into an unreviewed YAML profile; retains title/geography preferences; refuses replacement without `--force` |
+| `extract-profile [--output path] [--force]` | Extract resume facts and an evidenced header name into an unreviewed YAML profile; retains edited names and title/geography preferences; refuses replacement without `--force` |
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
@@ -313,3 +313,4 @@ category, and a next step in command output and `stats`. Failed batches are spli
 invalid single-job answers receive one repair attempt and may use the configured
 fallback. Cut-off answers may also use that fallback without a quota cooldown.
 Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `resume` / `answers`), inspect the diff and type `import`. This creates a new version and requires review; a new resume needs a fresh PDF. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.
+Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or tailored CVs or filling forms.

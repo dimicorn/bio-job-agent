@@ -702,3 +702,29 @@ def test_private_artifacts_under_umask(preparation, conn, tmp_path):
         assert Path(result["path"]).stat().st_mode & 0o777 == 0o600
     finally:
         os.umask(old)
+def test_institution_capture_stops_at_sentence_and_signoff():
+    assert not materials.unsupported(
+        'My PhD is from MIT.\n\nSincerely,\nAnna Example', 'Anna Example\nPhD, MIT'
+    )
+    assert 'Unverified employer/institution: Imaginary' in materials.unsupported(
+        'Worked at Imaginary.\n\nSincerely,\nAnna Example', 'Anna Example'
+    )
+
+
+def test_placeholder_name_blocks_materials_and_forms(preparation, conn):
+    from app.autopilot import values_for
+
+    cfg, profile, _ = preparation
+    profile.name = 'Example candidate'
+    with pytest.raises(ValueError, match='Set your name'):
+        materials.tailored_resume(cfg, conn, profile, {})
+    with pytest.raises(ValueError, match='Set your name'):
+        materials.write_batch(cfg, profile, [])
+    with pytest.raises(ValueError, match='Set your name'):
+        values_for(conn, profile, {})
+
+
+def test_signed_profile_name_is_traced_in_letter(preparation):
+    _, profile, rows = preparation
+    item = materials.Letter(job_id=rows[0]["id"], letter="Sincerely,\nAlex Example", claims=[])
+    assert not any("Untraced name/term" in issue for issue in materials.letter_issues(item, profile, rows[0]))

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.candidate.profile import import_profile
+from app.candidate.profile import import_profile, require_name
 from app.llm import ask_json
 from app.private import private_dir, private_file, private_open
 from app.resume import digest, require_reviewed, resume_text
@@ -146,7 +146,7 @@ def unsupported(text, candidate, job=""):
         ):
             issues.append(f"Untraced name/term (check employer, technology or degree): {token}")
     for token in re.findall(
-        r"\b(?:at|for|from|joined)\s+([A-Z][\w&.-]*(?:\s+[A-Z][\w&.-]*)*)", text
+        r"\b(?:at|for|from|joined)[ \t]+([A-Z][\w&-]*(?:[ \t]+[A-Z][\w&-]*)*)", text
     ):
         token = token.rstrip(".")
         if token.casefold() not in (candidate + "\n" + job).casefold():
@@ -181,7 +181,7 @@ def letter_issues(item, profile, row):
             )
             issues.extend(
                 "Claim does not trace to cited facts: " + issue
-                for issue in unsupported(claim.text, evidence)
+                for issue in unsupported(claim.text, profile.name + "\n" + evidence)
             )
     # Missing claim annotations must be visible even when the vocabulary check passes.
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", item.letter):
@@ -193,6 +193,7 @@ def letter_issues(item, profile, row):
 
 
 def save_version(cfg, conn, profile, row, kind, content, warnings=(), provenance=None):
+    require_name(profile)
     require_reviewed(cfg, profile)
     if not content.strip():
         raise ValueError("Material cannot be empty")
@@ -242,6 +243,7 @@ def save_version(cfg, conn, profile, row, kind, content, warnings=(), provenance
 
 
 def write_batch(cfg, profile, rows, instruction=""):
+    require_name(profile)
     require_reviewed(cfg, profile)
     payload = {
         "name": profile.name,
@@ -285,6 +287,7 @@ def write_batch(cfg, profile, rows, instruction=""):
 
 
 def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
+    require_name(profile)
     require_reviewed(cfg, profile)
     version = import_profile(conn, profile)
     pending = []
@@ -360,6 +363,7 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
 
 def tailored_resume(cfg, conn, profile, row):
     """Tailor order, never qualifications: copy reviewed facts verbatim with fact IDs."""
+    require_name(profile)
     require_reviewed(cfg, profile)
     if not profile.facts:
         raise ValueError("Resume tailoring needs reviewed facts")
@@ -523,6 +527,7 @@ def ats_check(pdf, md_text, name):
 
 
 def build_resume_pdf(cfg, conn, profile, row):
+    require_name(profile)
     require_reviewed(cfg, profile)
     current = latest(conn, row["id"], "resume")
     if (
