@@ -33,6 +33,14 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
                 (row["id"],),
             )
         ]
+        locations = list(
+            dict.fromkeys(
+                Posting.model_validate_json(x["posting_payload"]).location
+                for x in origins
+                if x["posting_payload"]
+                and Posting.model_validate_json(x["posting_payload"]).location
+            )
+        )
         eligible = [
             x
             for x in origins
@@ -40,6 +48,11 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
             and x["present"]
             and x["source_id"] in current_sources
             and not exclusion(job, current_sources[x["source_id"]], profile)
+            and not exclusion(
+                Posting.model_validate_json(x["posting_payload"]) if x["posting_payload"] else job,
+                current_sources[x["source_id"]],
+                profile,
+            )
         ]
         if not eligible:
             continue
@@ -81,6 +94,7 @@ def list_jobs(conn, profile, sources, cfg=None, now=None):
                 "application_state": applications.get(row["id"]),
                 "geography": geography(job, profile),
                 "origins": origins,
+                "locations": locations,
             }
         )
     return result

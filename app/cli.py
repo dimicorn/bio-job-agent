@@ -86,7 +86,13 @@ def _select(rows, args, *, review=False, min_score=0):
         if any(
             getattr(args, field)
             and getattr(args, field).casefold() not in (row.get(field) or "").casefold()
-            for field in ("title", "employer", "location")
+            for field in ("title", "employer")
+        ):
+            continue
+        if (
+            args.location
+            and args.location.casefold()
+            not in " ".join(row.get("locations") or [row.get("location") or ""]).casefold()
         ):
             continue
         if args.source and not any(x["source_id"] == args.source for x in row["origins"]):
@@ -124,7 +130,7 @@ def _list(rows):
             str(row["id"]),
             _text(row["title"]),
             _text(row["employer"]),
-            _text(row["location"] or "unknown"),
+            _text("; ".join(row.get("locations") or []) or row["location"] or "unknown"),
             _text(row.get("date_label", "posting date unknown")),
             row["review"]
             + " / "
@@ -140,7 +146,13 @@ def _list(rows):
     console.print(table)
     # Keep full copyable links in redirected output and narrow terminals too.
     for row in rows:
-        console.print(_text(f"{row['id']}: {row['apply_url']}"), soft_wrap=True)
+        for origin in row["origins"]:
+            console.print(
+                _text(
+                    f"{row['id']} origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}"
+                ),
+                soft_wrap=True,
+            )
     console.print(f"{len(rows)} matching roles. Unscored jobs have no verified matching result.")
 
 
@@ -216,7 +228,11 @@ def _review(conn, rows, cfg=None, profile=None):
                         f"job: {requirement['job_evidence']}"
                     )
                 )
-        console.print(_text(row["apply_url"]))
+        for origin in row["origins"]:
+            console.print(
+                _text(f"Origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}")
+            )
+        console.print(_text("Locations: " + ("; ".join(row.get("locations") or []) or "unknown")))
         _show_materials(conn, row, profile)
         console.print(
             "o open | s save | r reject | l later | v override | e edit letter | "
@@ -498,6 +514,12 @@ def _run(args, cfg):
         if args.command == "init":
             console.print("Database ready")
             return 0
+        if args.command == "unmerge":
+            from app.pipeline.dedupe import unmerge
+
+            new_id = unmerge(conn, args.job, args.origin)
+            console.print(f"Origin separated into job {new_id}")
+            return 0
         if args.command == "stats":
             _stats(conn, cfg)
             return 0
@@ -750,6 +772,9 @@ def main(argv=None) -> int:
     exp.add_argument("path", type=Path)
     _filters(exp)
     exp.set_defaults(limit=None)
+    split = sub.add_parser("unmerge", help="Separate a non-canonical origin from a job")
+    split.add_argument("job", type=_positive)
+    split.add_argument("origin", type=_positive)
     sub.add_parser("stats", help="Show job decisions, source health and LLM usage")
     register_firms_command(sub)
     args = parser.parse_args(argv)
