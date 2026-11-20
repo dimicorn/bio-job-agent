@@ -197,6 +197,13 @@ def test_wizard_saves_api_keys_and_fallback(configured, monkeypatch):
     document = yaml.safe_load(cfg.config_path.read_text())
     assert document["analyst"]["openai_extra"] == {"thinking": {"type": "disabled"}}
     assert document["analyst"]["fallback_backend"] == "pi"
+    # Only provider differences: the fallback must keep the primary's scoring preferences.
+    assert document["analyst"]["fallback_settings"] == {
+        "model": "my-pi-model",
+        "provider": "deepseek",
+        "base_url": None,
+        "openai_extra": {},
+    }
     assert document["apply"]["mode"] == "assisted"
     assert document["apply"]["daily_limit"] == 7
     assert document["apply"]["active_hours"] == [0, 24]
@@ -309,4 +316,76 @@ def test_doctor_warns_about_example_name(configured):
     cfg.candidate_path.write_text(yaml.safe_dump(profile))
     doctor.run(cfg)
     assert "Candidate name" in output.getvalue()
-    assert "Set your name" in output.getvalue()
+    assert "set name:" in output.getvalue()
+
+
+def test_fallback_overrides_keep_shared_scoring_settings():
+    primary = wizard.Analyst(
+        backend="openai", model="main", base_url="https://a.invalid/v1", preferences="London only"
+    )
+    fallback = wizard.Analyst(backend="claude_code", model="backup")
+    overrides = wizard.fallback_overrides(primary, fallback)
+    assert overrides == {"model": "backup", "base_url": None}
+    primary.fallback_backend, primary.fallback_settings = "claude_code", overrides
+    from app.llm import fallback_cfg
+
+    cfg = Settings(_env_file=None, analyst=primary)
+    selected = fallback_cfg(cfg).analyst
+    assert selected.preferences == "London only" and selected.base_url is None
+
+
+def test_doctor_pending_migrations_warn_and_next_steps(configured, monkeypatch):
+    from app.db import MIGRATIONS, connect, migrate
+    from app.resume import digest
+
+    cfg, output = configured
+    monkeypatch.setattr("app.materials.browser_available", lambda: True)
+    with connect(cfg.database_path) as conn:
+        migrate(conn)
+        conn.execute(
+            "DELETE FROM schema_migrations WHERE version=?",
+            (max(MIGRATIONS.glob("*.sql")).name,),
+        )
+    rows, step = doctor.collect(cfg)
+    statuses = {name: (status, detail) for name, status, detail in rows}
+    assert statuses["Database"][0] == "WARN" and "automatically" in statuses["Database"][1]
+    assert step.startswith("Fill resume.md")
+    cfg.resume_path.write_text("Jane Doe\nPrincipal Scientist")
+    assert doctor.collect(cfg)[1] == "uv run bio-jobs extract-profile --force"
+    profile = yaml.safe_load(cfg.candidate_path.read_text())
+    profile["resume_hash"] = digest("Jane Doe\nPrincipal Scientist")
+    cfg.candidate_path.write_text(yaml.safe_dump(profile))
+    assert "set reviewed: true" in doctor.collect(cfg)[1]
+    profile["reviewed"] = True
+    cfg.candidate_path.write_text(yaml.safe_dump(profile))
+    assert doctor.collect(cfg)[1].startswith("uv run bio-jobs scan")
+    cfg.resume_path.write_text("Jane Doe\nSenior Principal Scientist")
+    rows, step = doctor.collect(cfg)
+    assert step == "uv run bio-jobs extract-profile --force"
+    assert any(name == "Resume" and "changed" in detail for name, _s, detail in rows)
+    assert cli.main(["doctor"]) == 0
+    assert "Next step: uv run bio-jobs extract-profile --force" in output.getvalue()
+
+
+def test_setup_shows_current_choices_and_offers_extraction(configured, monkeypatch):
+    cfg, output = configured
+    cfg.config_path.write_text(cfg.config_path.read_text() + "apply:\n  mode: assisted\n")
+    cfg.resume_path.write_text("Jane Doe\nPrincipal Scientist")
+    monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(wizard, "check", lambda *a, **kw: None)
+    prompts = []
+    answers = iter(["n", "n", "n", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or next(answers))
+    calls = []
+
+    def extracted(selected, conn, profile, target, *, force):
+        calls.append((target, force))
+        return profile.model_copy(update={"name": "Jane Doe"}), 0
+
+    monkeypatch.setattr("app.resume.extract_to_file", extracted)
+    assert wizard.setup(cfg)
+    text = output.getvalue()
+    assert "Current LLM: command" in text and "mode assisted" in text
+    assert calls == [(cfg.candidate_path, True)]
+    assert "sends the resume to command" in prompts[-1]
+    assert "Next step:" in text

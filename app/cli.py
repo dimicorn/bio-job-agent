@@ -605,34 +605,20 @@ def _run(args, cfg):
             )
             return 0
         if args.command == "extract-profile":
-            from app.resume import DROPPED_PREFIX, extract_profile
+            from app.resume import extract_to_file
 
             target = args.output or cfg.resolved(cfg.candidate_path)
             if target == ROOT / "config/candidate.example.yaml":
                 target = target.with_name("candidate.yaml")
-            if target.exists() and not args.force:
-                raise ValueError(f"{target} exists; choose --output or --force to replace it")
-            if target.exists() and args.force:
-                existing = load_profile(target)
-                if (
-                    existing.name.strip()
-                    and existing.name.strip().casefold() != "example candidate"
-                ):
-                    profile = profile.model_copy(
-                        update={"name": existing.name, "name_evidence": existing.name_evidence}
-                    )
-            extracted = extract_profile(cfg, conn, profile)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("w" if args.force else "x", encoding="utf-8") as output:
-                yaml.safe_dump(extracted.model_dump(), output, sort_keys=False)
-            dropped = sum(u.startswith(DROPPED_PREFIX) for u in extracted.uncertainties)
+            _extracted, dropped = extract_to_file(cfg, conn, profile, target, force=args.force)
             console.print(
                 f"Extracted unreviewed profile: {target}; dropped {dropped} unsupported facts."
             )
             console.print(
-                "Review every fact, correct errors, then set reviewed: true. "
-                "Set BIO_CANDIDATE_PATH to this file in .env."
+                f"Next: open {target}, check every fact against your resume, then set reviewed: true."
             )
+            if target != cfg.resolved(cfg.candidate_path):
+                console.print(f"To use it, set BIO_CANDIDATE_PATH={target} in .env.")
             return 0
         if not profile.reviewed:
             console.print(

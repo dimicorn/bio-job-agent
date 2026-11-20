@@ -17,55 +17,123 @@ from app.settings import Settings
 from app.sources.config import load_sources
 
 console = Console(markup=False)
+CLI_EXECUTABLES = {"codex": "codex", "claude_code": "claude", "opencode": "opencode", "pi": "pi"}
 
 
-def run(cfg: Settings, *, online=False) -> int:
+def _describe(a) -> str:
+    """Human summary of one configured backend, without secrets."""
+    parts = [a.backend]
+    if a.provider:
+        parts.append(f"provider {a.provider}")
+    model = a.codex_model if a.backend == "codex" else a.model
+    parts.append(f"model {model or 'CLI default'}")
+    if a.base_url:
+        parts.append(f"at {a.base_url}")
+    if a.command:
+        parts.append(f"command {a.command}")
+    return ", ".join(parts)
+
+
+def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]], str | None]:
+    """Return (rows, next_step). The next step is the most important unresolved action."""
     from app.private import tighten_configured
 
     tighten_configured(cfg)
-    rows = []
+    rows: list[tuple[str, str, str]] = []
+    steps: list[tuple[int, str]] = []
 
-    def report(name, ok, detail):
-        rows.append((name, "OK" if ok else "MISSING", detail))
+    def report(name, ok, ok_detail, fix_detail=None, *, step=None, warn=False):
+        status = "OK" if ok else ("WARN" if warn else "MISSING")
+        rows.append((name, status, ok_detail if ok else (fix_detail or ok_detail)))
+        if not ok and step:
+            steps.append(step)
 
     report(
-        "Python", sys.version_info >= (3, 12), "Python 3.12+ required; ./setup.sh installs via uv"
+        "Python",
+        sys.version_info >= (3, 12),
+        f"{sys.version.split()[0]}",
+        "Python 3.12+ required; ./setup.sh installs it via uv",
+        step=(0, "./setup.sh"),
     )
     try:
         configured = cfg.with_config()
         tighten_configured(configured)
         report("LLM config", True, str(cfg.resolved(cfg.config_path)))
-    except (ValueError, OSError, TypeError, yaml.YAMLError):
+    except (ValueError, OSError, TypeError, yaml.YAMLError) as exc:
         configured = None
-        report("LLM config", False, "Run uv run bio-jobs setup")
+        report(
+            "LLM config",
+            False,
+            "",
+            f"{exc}. Run uv run bio-jobs setup",
+            step=(1, "uv run bio-jobs setup"),
+        )
+    candidate_path = cfg.resolved(cfg.candidate_path)
     try:
-        profile = load_profile(cfg.resolved(cfg.candidate_path))
+        profile = load_profile(candidate_path)
+    except (ValueError, OSError, yaml.YAMLError):
+        profile = None
+        report(
+            "Profile",
+            False,
+            "",
+            f"Cannot read {candidate_path}; run uv run bio-jobs setup",
+            step=(1, "uv run bio-jobs setup"),
+        )
+    if profile is not None:
+        from app.resume import resume_status
+
+        state, detail = resume_status(configured or cfg, profile)
+        fill = "Fill resume.md with your resume (see resume.example.md)"
+        extract = "uv run bio-jobs extract-profile --force"
+        report(
+            "Resume",
+            state == "current",
+            detail,
+            f"{detail}; then {extract}"
+            if state in ("missing", "empty", "example")
+            else f"{detail}; run {extract}",
+            step=(3, fill) if state in ("missing", "empty", "example") else (4, extract),
+            warn=True,
+        )
         try:
             require_name(profile)
-        except ValueError as exc:
-            rows.append(("Candidate name", "WARN", str(exc)))
-        rows.append(
-            (
-                "Profile",
-                "OK" if profile.reviewed else "WARN",
-                f"reviewed={profile.reviewed}; review {cfg.resolved(cfg.candidate_path)} and set reviewed: true",
+        except ValueError:
+            report(
+                "Candidate name",
+                False,
+                "",
+                "Still 'Example candidate'; extract-profile reads it from your resume header, "
+                f"or set name: in {candidate_path}",
+                warn=True,
             )
+        report(
+            "Profile",
+            profile.reviewed,
+            f"reviewed; {len(profile.facts)} facts in {candidate_path}",
+            f"not reviewed; check every fact in {candidate_path}, then set reviewed: true",
+            step=(5, f"Review {candidate_path} and set reviewed: true"),
+            warn=True,
         )
-    except (ValueError, OSError, yaml.YAMLError):
-        report("Profile", False, "Run bio-jobs setup or bio-jobs import-profile <path>")
     try:
         sources = load_sources(cfg.resolved(cfg.sources_path))
         enabled = [s for s in sources if s.enabled]
         report(
             "Sources",
             bool(enabled),
-            f"{len(enabled)} enabled; edit {cfg.resolved(cfg.sources_path)}",
+            f"{len(enabled)} enabled in {cfg.resolved(cfg.sources_path)}",
+            f"None enabled; edit {cfg.resolved(cfg.sources_path)}",
         )
-    except (ValueError, OSError, yaml.YAMLError):
-        report("Sources", False, f"Fix sources at {cfg.resolved(cfg.sources_path)}")
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        report("Sources", False, "", f"Fix {cfg.resolved(cfg.sources_path)}: {exc}")
     from app.materials import browser_available
 
-    report("Chromium", browser_available(), "PDF rendering: uv run playwright install chromium")
+    report(
+        "Chromium",
+        browser_available(),
+        "installed (PDFs and browser apply)",
+        "Run uv run playwright install chromium",
+    )
     if configured:
         a = configured.apply
         report(
@@ -82,8 +150,16 @@ def run(cfg: Settings, *, online=False) -> int:
                 applied = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
                 from app.db import MIGRATIONS
 
-                pending = {p.name for p in MIGRATIONS.glob("*.sql")} - applied
-                report("Database", not pending, "Run bio-jobs init" if pending else str(path))
+                pending = sorted({p.name for p in MIGRATIONS.glob("*.sql")} - applied)
+                # Every database command migrates first, so pending upgrades are not a fault.
+                report(
+                    "Database",
+                    not pending,
+                    str(path),
+                    f"{len(pending)} upgrade(s) pending ({', '.join(pending)}); applied "
+                    "automatically by the next command, or run uv run bio-jobs init",
+                    warn=True,
+                )
                 conn.row_factory = sqlite3.Row
                 for row in conn.execute("SELECT * FROM sources ORDER BY id"):
                     report(
@@ -98,67 +174,96 @@ def run(cfg: Settings, *, online=False) -> int:
                         ),
                     )
         except sqlite3.Error:
-            report("Database", False, "Invalid/uninitialised database; run bio-jobs init")
+            report(
+                "Database",
+                False,
+                "",
+                "Invalid/uninitialised database; run uv run bio-jobs init",
+                step=(2, "uv run bio-jobs init"),
+            )
     else:
-        report("Database", False, "Run bio-jobs init (or ./setup.sh)")
+        report(
+            "Database",
+            False,
+            "",
+            "Not created yet; run uv run bio-jobs init",
+            step=(2, "uv run bio-jobs init"),
+        )
     env_path = cfg.resolved(cfg.env_path)
     if env_path.exists():
-        report(".env permissions", os.stat(env_path).st_mode & 0o077 == 0, f"chmod 600 {env_path}")
+        report(
+            ".env permissions",
+            os.stat(env_path).st_mode & 0o077 == 0,
+            "owner only",
+            f"Readable by others; run chmod 600 {env_path}",
+        )
     if configured:
         choices = [("Primary", configured)]
         if configured.analyst.fallback_backend:
             choices.append(("Fallback", fallback_cfg(configured)))
         for label, selected in choices:
             a = selected.analyst
-            ok = True
             thinking = a.openai_extra.get("thinking")
             if (
                 a.backend == "openai"
                 and "deepseek" in (a.base_url or "").lower()
                 and (not isinstance(thinking, dict) or thinking.get("type") != "disabled")
             ):
-                rows.append(
-                    (
-                        f"{label} thinking",
-                        "WARN",
-                        "Set analyst.openai_extra: {thinking: {type: disabled}}",
-                    )
+                report(
+                    f"{label} thinking",
+                    False,
+                    "",
+                    "DeepSeek thinking is on and uses output tokens; in config.yaml set "
+                    "analyst.openai_extra: {thinking: {type: disabled}}",
+                    warn=True,
                 )
+            setup_step = (1, "uv run bio-jobs setup")
             if a.backend in ("openai", "api"):
                 name = a.api_key_env or ("ANTHROPIC_API_KEY" if a.backend == "api" else None)
-                ok = (
-                    bool(a.model)
-                    and (a.backend != "openai" or bool(a.base_url))
-                    and (not name or bool(selected.secret(name)))
-                )
+                missing = [
+                    item
+                    for item, present in (
+                        ("model", bool(a.model)),
+                        ("base_url", a.backend != "openai" or bool(a.base_url)),
+                        (f"{name} in .env", not name or bool(selected.secret(name))),
+                    )
+                    if not present
+                ]
+                ok = not missing
                 report(
                     label,
                     ok,
-                    f"{a.backend}: set model/base_url and {name or 'no key required'}; bio-jobs setup",
+                    _describe(a) + (f"; key {name} set" if name else "; no key required"),
+                    f"{a.backend}: missing {', '.join(missing)}; run uv run bio-jobs setup",
+                    step=setup_step,
                 )
             else:
-                executable = {
-                    "codex": "codex",
-                    "claude_code": "claude",
-                    "opencode": "opencode",
-                    "pi": "pi",
-                }.get(a.backend)
+                executable = CLI_EXECUTABLES.get(a.backend)
                 if a.backend == "command":
                     executable = shlex.split(a.command or "")[:1]
                     executable = executable[0] if executable else None
-                ok = bool(executable and shutil.which(executable))
-                if a.backend in ("opencode", "pi"):
-                    ok = ok and bool(a.provider and a.model)
+                found = bool(executable and shutil.which(executable))
+                needs_model = a.backend in ("opencode", "pi") and not (a.provider and a.model)
+                ok = found and not needs_model
+                problems = []
+                if not found:
+                    problems.append(f"{executable or 'command'} not found in PATH")
+                if needs_model:
+                    problems.append("provider/model not set")
                 report(
                     label,
                     ok,
-                    f"{a.backend}: install CLI in PATH, sign in/set key, select provider/model via setup",
+                    _describe(a),
+                    f"{a.backend}: {'; '.join(problems)}; install/sign in, then uv run bio-jobs setup",
+                    step=setup_step,
                 )
                 if a.api_key_env and not selected.secret(a.api_key_env):
                     report(
                         f"{label} key",
                         False,
+                        "",
                         f"Set {a.api_key_env} in .env or sign in through the CLI",
+                        step=setup_step,
                     )
             if online and ok:
                 try:
@@ -168,8 +273,18 @@ def run(cfg: Settings, *, online=False) -> int:
                     report(
                         f"{label} live check",
                         False,
+                        "",
                         "Model check failed; check CLI login, provider/model and credentials",
+                        step=setup_step,
                     )
+    step = min(steps)[1] if steps else None
+    if step is None and configured and profile is not None and profile.reviewed:
+        step = "uv run bio-jobs scan, then uv run bio-jobs review"
+    return rows, step
+
+
+def run(cfg: Settings, *, online=False) -> int:
+    rows, step = collect(cfg, online=online)
     table = Table("Check", "Status", "Details", title="bio-jobs doctor")
     for row in rows:
         table.add_row(*row)
@@ -178,4 +293,6 @@ def run(cfg: Settings, *, online=False) -> int:
         console.print(
             "LLM credentials/model reachability were not tested. Use llm-check or doctor --online."
         )
+    if step:
+        console.print(f"Next step: {step}")
     return int(any(status == "MISSING" for _, status, _ in rows))
