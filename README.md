@@ -16,9 +16,9 @@ From a clone of this repository on macOS or Linux, run one command:
 ./setup.sh
 ```
 
-The script offers to install [uv](https://docs.astral.sh/uv/getting-started/installation/) if missing, installs the locked dependencies (including a suitable Python when needed), initialises SQLite, and opens the setup wizard. The wizard selects a primary and optional fallback LLM, stores API keys with hidden input in gitignored `.env`, sends one tiny structured check to each selected backend, copies the candidate example when needed and imports the profile. It is safe to rerun: existing profiles, keys, database history and configuration are retained unless you choose to change the LLM settings. A failed model check exits with a failure status while retaining your settings for correction.
+The script offers to install [uv](https://docs.astral.sh/uv/getting-started/installation/) if missing, installs the locked dependencies (including a suitable Python when needed), initialises SQLite, and opens the setup wizard. The wizard selects a primary and optional fallback LLM, stores API keys with hidden input in gitignored `.env`, sends one tiny structured check to each selected backend, copies the candidate example when needed and imports the profile. When `resume.md` is filled but not yet extracted (or changed since extraction), it offers to run profile extraction, which sends the resume to the selected LLM. It is safe to rerun: it shows the current LLM and apply settings first, and existing profiles, keys, database history and configuration are retained unless you choose to change them. A failed model check exits with a failure status while retaining your settings for correction.
 
-Fill the gitignored `resume.md` (see [resume.example.md](resume.example.md)) and put job wishes in `analyst.preferences` in `config.yaml`. Extract a profile, review every fact and supporting excerpt in `config/candidate.yaml`, correct any errors, and only then set `reviewed: true`. Keep the generated `resume_hash`; editing the resume requires extraction and review again. The example asserts no candidate qualifications. Unreviewed profiles can explore discovery with `list --all-scores`, but cannot score jobs.
+Fill the gitignored `resume.md` (see [resume.example.md](resume.example.md)) and put job wishes in `analyst.preferences` in `config.yaml`. Extract a profile, review every fact and supporting excerpt in `config/candidate.yaml`, correct any errors, and only then set `reviewed: true`. Keep the generated `resume_hash`; editing the resume requires extraction and review again. The example asserts no candidate qualifications. Unreviewed profiles can explore discovery with `list --all-scores`, but cannot score jobs. `doctor` gives a reason for each check, including the `resume.md` status (missing, empty, example, unextracted or changed), and ends with the single most important next step.
 
 ```sh
 uv run bio-jobs doctor
@@ -26,7 +26,7 @@ uv run bio-jobs extract-profile --force
 # Review config/candidate.yaml and set reviewed: true before continuing.
 uv run bio-jobs scan
 uv run bio-jobs list
-uv run bio-jobs review
+uv run bio-jobs review   # a prepares any missing letter, CV and answers, then approves
 ```
 
 `bio-jobs` or `bio-jobs help` shows commands without network access. On the first operational run without `config.yaml`, the wizard opens automatically in a terminal; noninteractive runs print a setup instruction. Discovery does not call an LLM. Profile extraction and scoring send candidate facts and job text to the configured LLM; setup, `llm-check`, and `doctor --online` send small connection checks. Install and authenticate the CLI you select (OpenCode, Pi, Codex or Claude Code); the script does not install those applications.
@@ -65,7 +65,16 @@ fallback. Cut-off answers may also use that fallback without a quota cooldown.
 
 ### Review, materials and approval
 
-Saving a job in `review` starts its application. Preparation needs a reviewed profile whose resume hash matches `resume.md`:
+Saving a job in `review` starts its application. Preparation needs a reviewed profile whose resume hash matches `resume.md`. Prepare a scored job in one step:
+
+```sh
+uv run bio-jobs prepare 42               # everything missing or stale, then the open questions
+uv run bio-jobs review --status saved    # or press a on the job: it prepares first, then approves
+```
+
+`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its ATS check and the screening draft, but only for pieces that are missing or stale; current materials stay as they are. It then shows the letter with each claim and its cited facts, plus any warnings, and asks only the screening questions `answers.yaml` cannot answer. Without an interactive terminal it prepares what it can, lists the unanswered questions and prints the command to run in a terminal.
+
+The single commands are optional, for redoing one piece:
 
 ```sh
 uv run bio-jobs letters                  # checked cover letters for jobs at analyst.min_score
@@ -73,10 +82,9 @@ uv run bio-jobs resume 42                # tailored, editable Markdown CV
 uv run bio-jobs pdf 42                   # Chromium PDF plus ATS text check
 uv run bio-jobs answers --job 42 --show  # screening-question draft from answers.yaml
 uv run bio-jobs diff 42                  # latest two versions of each material
-uv run bio-jobs review --status saved    # e edit, w rewrite, d diff, a approve
 ```
 
-Every generated claim cites reviewed facts and is checked for unsupported content; read each letter and its warnings before approving. Approval (`a` in review) pins the current letter, CV PDF and answers and requires typing `approve` to accept any warnings. Edited files must be re-imported with `bio-jobs import`. Details: [docs/applications.md](docs/applications.md).
+Every generated claim cites reviewed facts and is checked for unsupported content; read each letter and its warnings before approving. Approval (`a` in review) prepares anything missing or stale, pins the current letter, CV PDF and answers and requires typing `approve` to accept any warnings or newly prepared materials. Edited files must be re-imported with `bio-jobs import`. Details: [docs/applications.md](docs/applications.md).
 
 ### Apply
 
@@ -99,8 +107,8 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 
 | Command | Behavior |
 | --- | --- |
-| `setup` | Choose primary/fallback LLM, import preferences, check each model |
-| `doctor [--online]` | Local setup and source health; opt in to live LLM checks |
+| `setup` | Show current settings, choose primary/fallback LLM, import preferences, check each model, offer profile extraction |
+| `doctor [--online]` | Local setup, resume and source health with a reason per check and one next step; opt in to live LLM checks |
 | `firms [--validate]` | List the reviewed employer watchlist; explicitly reverify public boards with `--validate` |
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
 | `extract-profile [--output path] [--force]` | Extract resume facts and an evidenced header name into an unreviewed YAML profile; retains edited names and title/geography preferences; refuses replacement without `--force` |
@@ -108,10 +116,11 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
+| `prepare <job>` | Create any missing or stale letter, resume, resume PDF (with ATS check) and screening draft; show the letter claims; ask only the screening questions `answers.yaml` cannot answer |
 | `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
 | `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
-| `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **q** quit; shows dimension and must-have evidence |
-| `letters`, `resume`, `pdf`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Prepare, compare, import and track application materials ([docs/applications.md](docs/applications.md)) |
+| `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |
+| `letters`, `resume`, `pdf`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Optionally redo one material, compare, import and track application materials ([docs/applications.md](docs/applications.md)) |
 | `unmerge JOB ORIGIN` | Separate a non-canonical origin from a grouped job |
 | `feed-review <feed.json>` | Experimental offline lead review ([docs/feed-review.md](docs/feed-review.md)) |
 | `export <file.csv>` | Export matching stored jobs, review decisions and provenance |
@@ -125,7 +134,7 @@ source outcomes, job changes, scoring failures, application transitions, and not
 results. Summaries contain IDs and error categories, never CVs, answers, credentials, or provider
 response text. A summary left in `running` state indicates the process did not finish cleanly.
 
-Long-running scan, analyze, letters, watch, autopilot and apply commands prevent idle sleep on
+Long-running scan, analyze, letters, prepare, watch, autopilot and apply commands prevent idle sleep on
 macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already
 running are allowed to finish and their results are saved, with saved and unfinished job IDs
 reported. A second Ctrl+C exits immediately. Interrupted submissions retain their existing

@@ -21,6 +21,7 @@ from app import answers, applications, materials, stop
 from app.candidate.profile import import_profile, load_profile
 from app.db import connect, migrate
 from app.pipeline.discover import discover
+from app.resume import digest
 from app.settings import ROOT, Settings
 from app.sources.config import load_sources
 from app.sources.feed_review import register_feed_review_command, run_feed_review_command
@@ -291,9 +292,42 @@ def _review(conn, rows, cfg=None, profile=None):
                             )
                             _show_materials(conn, row, profile)
                     elif action == "a":
+                        # Gates first, so ineligible jobs never spend LLM calls on materials.
+                        applications.check_gates(cfg, conn, row, used=approved_this_run)
+                        applications.check_company(cfg, conn, row)
+                        prepared = _prepare(conn, row, cfg, profile, interactive=True)
+                        if prepared.problems:
+                            console.print("Approval not recorded.")
+                            continue
+                        expected = {}
+                        if prepared.created:
+                            ids = {
+                                kind: materials.latest(conn, row["id"], kind)["id"]
+                                for kind in ("letter", "resume", "answers")
+                            }
+                            bank = digest(answers.load_answers(cfg))
+                            try:
+                                applications.validate_materials(cfg, conn, profile, row)
+                            except applications.UnresolvedWarnings:
+                                pass  # the warning prompt below is the confirmation
+                            else:
+                                if (
+                                    input("Type approve to approve these materials: ")
+                                    .strip()
+                                    .lower()
+                                    != "approve"
+                                ):
+                                    console.print("Approval cancelled; materials kept.")
+                                    continue
+                            expected = {"expected_ids": ids, "expected_answers_hash": bank}
                         try:
                             paths = applications.approve(
-                                cfg, conn, profile, row, approved_this_run=approved_this_run
+                                cfg,
+                                conn,
+                                profile,
+                                row,
+                                approved_this_run=approved_this_run,
+                                **expected,
                             )
                         except applications.UnresolvedWarnings as exc:
                             for kind, warnings in exc.warnings.items():
@@ -429,6 +463,34 @@ def _show_materials(conn, row, profile=None):
             console.print(_text(item["pdf_path"]))
         for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):
             console.print(_text("WARNING: " + warning))
+
+
+def _prepare(conn, row, cfg, profile, *, interactive, show="created"):
+    """Create missing/stale materials, show them, then ask unanswered screening questions."""
+    from app.prepare import prepare_answers, prepare_materials
+
+    def say(message):
+        console.print(_text(message))
+
+    result = prepare_materials(cfg, conn, profile, row, output=say)
+    if show == "always" or result.created:
+        _show_materials(conn, row, profile)
+    prepare_answers(cfg, conn, profile, row, result, interactive=interactive, output=say)
+    if result.created:
+        say("Prepared: " + ", ".join(result.created))
+    if result.current:
+        say("Already current, left unchanged: " + ", ".join(result.current))
+    for problem in result.problems:
+        say("Not prepared: " + problem)
+    if result.unanswered:
+        say("Unanswered screening questions:")
+        for item in result.unanswered:
+            say(f"  - {item['question']}" + ("" if item["required"] else " (optional)"))
+        if not interactive:
+            say(f"Answer them in a terminal: uv run bio-jobs prepare {row['id']}")
+        elif any(item["required"] for item in result.unanswered):
+            say("Approval will ask you to accept the unanswered required questions as warnings.")
+    return result
 
 
 def _stats(conn, cfg):
@@ -758,7 +820,7 @@ def _run(args, cfg):
             )
             console.print(_text(item["path"]))
             return 0
-        if args.command in ("letters", "resume", "pdf", "letter-pdf", "answers"):
+        if args.command in ("letters", "resume", "pdf", "letter-pdf", "answers", "prepare"):
             from app.resume import require_reviewed
 
             require_reviewed(cfg, profile)
@@ -769,7 +831,22 @@ def _run(args, cfg):
                 selected[0].get("score") is None or selected[0]["score"] < cfg.analyst.min_score
             ):
                 raise ValueError(applications.score_gate_message(cfg, selected[0]))
-            if args.command == "letters":
+            if args.command == "prepare":
+                result = _prepare(
+                    conn,
+                    selected[0],
+                    cfg,
+                    profile,
+                    interactive=sys.stdin.isatty(),
+                    show="always",
+                )
+                if result.problems:
+                    return 1
+                console.print(
+                    "Next: approve in uv run bio-jobs review --application-state "
+                    "awaiting_review (press a)."
+                )
+            elif args.command == "letters":
                 done = materials.write_letters(cfg, conn, profile, selected, force=args.force)
                 console.print(
                     f"Prepared {done} letters. Review shows warnings and fact provenance."
@@ -869,6 +946,11 @@ def main(argv=None) -> int:
         "autopilot", aliases=["run"], help="One auto pass: sync, score, then apply approved jobs"
     )
     autopilot.add_argument("--no-scan", action="store_true", help="Use stored approved queue only")
+    prepare = sub.add_parser(
+        "prepare",
+        help="Create any missing or stale letter, resume, PDF and answers; ask what is unknown",
+    )
+    prepare.add_argument("job", type=_positive)
     letters = sub.add_parser("letters", help="Batch checked cover letters at analyst.min_score")
     letters.add_argument("--job", type=_positive)
     letters.add_argument(
@@ -940,7 +1022,8 @@ def main(argv=None) -> int:
         with (
             stop.installed(),
             stop.prevent_sleep()
-            if args.command in ("scan", "analyze", "letters", "watch", "autopilot", "apply")
+            if args.command
+            in ("scan", "analyze", "letters", "prepare", "watch", "autopilot", "apply")
             else contextlib.nullcontext(),
         ):
             if args.command in ("sync", "scan", "watch", "autopilot", "apply"):

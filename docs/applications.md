@@ -6,7 +6,22 @@ Reference detail for preparing and submitting applications. See the [README](../
 
 Preparation uses your reviewed candidate profile and its matching resume hash. Run
 `extract-profile`, review the facts and set `reviewed: true` before generating materials.
-Job preferences never count as qualifications. Prepare a scored job like this:
+Job preferences never count as qualifications. Prepare a scored job in one step:
+
+```bash
+uv run bio-jobs prepare 42              # everything missing or stale, then the open questions
+uv run bio-jobs review                  # or simply press a on the job: it prepares first
+```
+
+`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its
+ATS check and the screening draft, but only for pieces that are missing or stale; current
+materials stay as they are, with no new versions. It then shows the letter with each claim
+and its cited facts, plus any warnings, and asks only the screening questions the answer
+bank cannot answer. Without an interactive terminal it prepares everything it can, lists
+the unanswered questions and prints the command to run in a terminal. A material file you
+edited is never replaced: preparation stops with the `import` command to run first.
+
+The single commands remain for redoing one piece:
 
 ```bash
 uv run bio-jobs letters                 # batches jobs at analyst.min_score
@@ -88,12 +103,14 @@ Additional keys are:
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |
-| `a` | Approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
+| `a` | Prepare any missing or stale materials (as `prepare` does), show anything new for confirmation, then approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
 | `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
 Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
-explicit acknowledgement of any material or ATS warnings. Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Missing or stale materials, changed files or answers, cooldowns, and score and limit gates remain blockers. It only marks the
+explicit acknowledgement of any material or ATS warnings. When `a` had to prepare anything,
+review shows the new materials and asks you to type `approve` before recording approval.
+Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Edited material files, cooldowns, and score and limit gates remain blockers; missing or stale materials are prepared first. It only marks the
 job approved; browser execution is a separate `apply` command. Saving a review decision
 also initializes the application state to `saved`. States are `saved`, `preparing`,
 `awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn`, `submitting`,
