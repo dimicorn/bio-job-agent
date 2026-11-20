@@ -16,6 +16,16 @@ from app.llm import check, fallback_cfg
 from app.settings import ROOT, Analyst, Apply, Settings
 
 console = Console(markup=False)
+# Scoring choices shared by primary and fallback; fallback_settings must never override them.
+SHARED = (
+    "preferences",
+    "letter_style",
+    "letter_length",
+    "batch_size",
+    "parallel",
+    "min_score",
+    "weights",
+)
 OPTIONS = [
     "DeepSeek API",
     "OpenAI API",
@@ -97,7 +107,8 @@ def _choose(cfg: Settings, index: int | None = None) -> Analyst:
             "api_key_env": name,
             "model": _ask("Model ID", default_model),
         }
-        if i == 0:
+        if "deepseek" in url.lower():
+            # Thinking spends the output budget that detailed scoring batches need.
             values["openai_extra"] = {"thinking": {"type": "disabled"}}
     elif i in (3, 4):
         backend = "opencode" if i == 3 else "pi"
@@ -146,7 +157,10 @@ def setup(cfg: Settings) -> bool:
     document = document or {}
     if not isinstance(document, dict):
         raise TypeError("config.yaml must contain a mapping; correct it before rerunning setup")
-    if path.exists() and not _yes("LLM config exists. Choose primary/fallback again?"):
+    current = _current_llm(cfg) if path.exists() else None
+    if current:
+        console.print(f"Current LLM: {current}")
+    if current and not _yes("Change the LLM?"):
         configured = cfg.with_config()
     else:
         primary = _choose(cfg)
@@ -159,16 +173,21 @@ def setup(cfg: Settings) -> bool:
         if index:
             fallback = _choose(cfg, index - 1)
             primary.fallback_backend = fallback.backend
-            primary.fallback_settings = fallback.model_dump(
-                exclude={"backend", "fallback_backend", "fallback_settings"}
-            )
+            primary.fallback_settings = fallback_overrides(primary, fallback)
         document["analyst"] = primary.model_dump()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         configured = cfg.with_config()
         console.print(f"Saved LLM config: {path}")
 
-    if "apply" not in document or _yes("Apply settings exist. Configure mode and gates again?"):
+    if "apply" in document:
+        current_apply = Apply.model_validate(document["apply"])
+        console.print(
+            f"Current apply settings: mode {current_apply.mode}, daily_limit "
+            f"{current_apply.daily_limit}, min_score {current_apply.min_score}, active hours "
+            f"{current_apply.active_hours[0]}-{current_apply.active_hours[1]}"
+        )
+    if "apply" not in document or _yes("Change the apply settings?"):
         apply = Apply.model_validate(document.get("apply", {}))
         modes = ["manual", "assisted", "auto"]
         apply.mode = modes[_pick("Apply mode (assisted/auto use manual handoff until M4):", modes)]
@@ -240,10 +259,7 @@ def setup(cfg: Settings) -> bool:
     if not resume.exists() and example.exists():
         resume.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(example, resume)
-    console.print(
-        "Fill resume.md, run bio-jobs extract-profile --force, then review "
-        "every extracted fact and set reviewed: true only when accurate."
-    )
+        console.print(f"Created {resume} from the example; replace it with your resume.")
     checks = [("Primary", configured)]
     if configured.analyst.fallback_backend:
         checks.append(("Fallback", fallback_cfg(configured)))
@@ -258,8 +274,63 @@ def setup(cfg: Settings) -> bool:
             console.print(
                 f"{label}: check failed. Run bio-jobs doctor; correct config/credentials and rerun setup."
             )
-    console.print(
-        "Next: uv run bio-jobs doctor; uv run bio-jobs extract-profile --force; "
-        "review candidate YAML; uv run bio-jobs scan; uv run bio-jobs list"
-    )
+    if passed:
+        _offer_extraction(configured, candidate, profile)
+    from app.doctor import collect
+
+    _rows, step = collect(cfg)
+    console.print(f"Next step: {step}" if step else "Setup complete. Run uv run bio-jobs doctor.")
     return passed
+
+
+def _current_llm(cfg: Settings) -> str | None:
+    try:
+        a = cfg.with_config().analyst
+    except (ValueError, TypeError, OSError, yaml.YAMLError):
+        return None
+    from app.doctor import _describe
+
+    summary = _describe(a)
+    if a.fallback_backend:
+        summary += f"; fallback {_describe(fallback_cfg(cfg.with_config()).analyst)}"
+    return summary
+
+
+def fallback_overrides(primary: Analyst, fallback: Analyst) -> dict:
+    """Only the provider fields where the fallback differs from the primary."""
+    excluded = {*SHARED, "backend", "fallback_backend", "fallback_settings"}
+    chosen = fallback.model_dump(exclude=excluded)
+    base = primary.model_dump(exclude=excluded)
+    return {key: value for key, value in chosen.items() if value != base[key]}
+
+
+def _offer_extraction(cfg: Settings, candidate, profile) -> None:
+    """Offer extract-profile when the resume is filled but not reflected in the profile."""
+    from app.resume import extract_to_file, resume_status
+
+    state, detail = resume_status(cfg, profile)
+    if state not in ("unextracted", "changed"):
+        return
+    console.print(detail + ".")
+    if profile.reviewed:
+        console.print(
+            f"Extracting replaces the reviewed facts in {candidate} with unreviewed ones."
+        )
+    if not _yes(
+        f"Extract your profile now? This sends the resume to {cfg.analyst.backend}.",
+        default=not profile.reviewed,
+    ):
+        return
+    console.print("Extracting…")
+    try:
+        with connect(cfg.resolved(cfg.database_path)) as conn:
+            extracted, dropped = extract_to_file(cfg, conn, profile, candidate, force=True)
+    except (ValueError, RuntimeError, OSError, httpx.HTTPError) as exc:
+        console.print(
+            f"Extraction failed: {exc}. Retry with uv run bio-jobs extract-profile --force"
+        )
+        return
+    console.print(
+        f"Extracted {len(extracted.facts)} facts for {extracted.name or 'unknown name'} into "
+        f"{candidate}; dropped {dropped} without resume evidence."
+    )

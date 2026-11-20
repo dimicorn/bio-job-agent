@@ -5,6 +5,7 @@ import json
 import re
 import string
 
+import yaml
 from pydantic import BaseModel, ConfigDict
 
 from app.candidate.profile import CandidateProfile, Fact
@@ -154,3 +155,43 @@ def require_reviewed(cfg, profile):
         raise ValueError(
             "Resume changed or profile has no resume hash. Run extract-profile and review it"
         )
+
+
+def resume_status(cfg, profile: CandidateProfile) -> tuple[str, str]:
+    """Return (state, detail): missing | example | empty | unextracted | changed | current."""
+    from app.settings import ROOT
+
+    path = cfg.resolved(cfg.resume_path)
+    if not path.exists():
+        return "missing", f"No resume at {path}; copy resume.example.md and fill it"
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return "empty", f"{path} is empty; fill it from resume.example.md"
+    example = ROOT / "resume.example.md"
+    if example.exists() and text == example.read_text(encoding="utf-8").strip():
+        return "example", f"{path} still contains the example; replace it with your resume"
+    if not profile.resume_hash:
+        return "unextracted", f"{path} has not been extracted into the profile yet"
+    if profile.resume_hash != digest(text):
+        return "changed", f"{path} changed since the profile was extracted"
+    return "current", f"{path} matches the profile"
+
+
+def extract_to_file(cfg, conn, base: CandidateProfile, target, *, force: bool):
+    """Extract an unreviewed profile into target, keeping a name the person already set."""
+    if target.exists() and not force:
+        raise ValueError(f"{target} exists; choose --output or --force to replace it")
+    if target.exists():
+        from app.candidate.profile import load_profile
+
+        existing = load_profile(target)
+        if existing.name.strip() and existing.name.strip().casefold() != "example candidate":
+            base = base.model_copy(
+                update={"name": existing.name, "name_evidence": existing.name_evidence}
+            )
+    extracted = extract_profile(cfg, conn, base)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w" if force else "x", encoding="utf-8") as output:
+        yaml.safe_dump(extracted.model_dump(), output, sort_keys=False, allow_unicode=True)
+    dropped = sum(u.startswith(DROPPED_PREFIX) for u in extracted.uncertainties)
+    return extracted, dropped
