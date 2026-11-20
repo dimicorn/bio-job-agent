@@ -150,29 +150,37 @@ def snapshot(cfg, conn, profile, row):
     )
 
 
+def ask_missing(cfg, conn, row, *, interactive=False, output=print):
+    """List (and, interactively, ask) the questions answers.yaml cannot answer."""
+    for item in plan(cfg, conn, row):
+        if item["answer"]:
+            continue
+        output(
+            f"{row['id']} {row['employer']}: {item['question']}"
+            + ("" if item["required"] else " (optional)")
+        )
+        if not interactive:
+            continue
+        for i, option in enumerate(item["options"], 1):
+            output(f"  {i}. {option}")
+        raw = input("Answer (option numbers separated by commas; Enter skips): ").strip()
+        if not raw:
+            continue
+        if item["options"]:
+            try:
+                indexes = [int(x.strip()) for x in raw.split(",")]
+                if not indexes or any(i < 1 or i > len(item["options"]) for i in indexes):
+                    raise ValueError("Invalid option")
+                value = [item["options"][i - 1] for i in indexes]
+            except ValueError:
+                output("Invalid option; left unanswered.")
+                continue
+        else:
+            value = raw
+        save_answer(cfg, item["question"], value, row["employer"])
+
+
 def collect(cfg, conn, profile, rows, *, interactive=False, output=print):
     for row in rows:
-        for item in plan(cfg, conn, row):
-            if item["answer"]:
-                continue
-            output(f"{row['id']} {row['employer']}: {item['question']}")
-            if not interactive:
-                continue
-            for i, option in enumerate(item["options"], 1):
-                output(f"  {i}. {option}")
-            raw = input("Answer (option numbers separated by commas; Enter skips): ").strip()
-            if not raw:
-                continue
-            if item["options"]:
-                try:
-                    indexes = [int(x.strip()) for x in raw.split(",")]
-                    if not indexes or any(i < 1 or i > len(item["options"]) for i in indexes):
-                        raise ValueError("Invalid option")
-                    value = [item["options"][i - 1] for i in indexes]
-                except ValueError:
-                    output("Invalid option; left unanswered.")
-                    continue
-            else:
-                value = raw
-            save_answer(cfg, item["question"], value, row["employer"])
+        ask_missing(cfg, conn, row, interactive=interactive, output=output)
         snapshot(cfg, conn, profile, row)

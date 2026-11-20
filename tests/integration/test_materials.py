@@ -797,3 +797,203 @@ def test_realistic_two_page_resume_pdf(preparation, conn):
         assert len(list(PDFPage.get_pages(pdf))) == 2
     text = extract_text(str(out))
     assert "Synthetic Scientist" in text and "MSc Biology" in text
+
+
+def fake_pdf(monkeypatch):
+    monkeypatch.setattr(materials, "browser_available", lambda: True)
+    monkeypatch.setattr(materials, "render_pdf", lambda text, out: out.write_bytes(b"fake-pdf"))
+    monkeypatch.setattr(materials, "ats_check", lambda *a: [])
+
+
+def versions(conn, row):
+    return conn.execute(
+        "SELECT kind,id FROM material_versions WHERE job_id=? ORDER BY id", (row["id"],)
+    ).fetchall()
+
+
+def run_prepare(cfg, conn, profile, row, *, interactive=False):
+    from app.prepare import prepare_answers, prepare_materials
+
+    result = prepare_materials(cfg, conn, profile, row, output=lambda _: None)
+    return prepare_answers(
+        cfg, conn, profile, row, result, interactive=interactive, output=lambda _: None
+    )
+
+
+def test_prepare_creates_only_missing_and_keeps_current(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    calls = []
+    mock_letters(monkeypatch, calls)
+    fake_pdf(monkeypatch)
+    resume_item = materials.tailored_resume(cfg, conn, profile, row)
+    result = run_prepare(cfg, conn, profile, row)
+    assert result.created == ["letter", "resume PDF", "answers"]
+    assert result.current == ["resume"] and not result.problems
+    assert len(calls) == 1
+    assert materials.latest(conn, row["id"], "resume")["id"] == resume_item["id"]
+    assert applications.approve(cfg, conn, profile, row)
+    before = versions(conn, row)
+    again = run_prepare(cfg, conn, profile, row)
+    assert not again.created and not again.problems
+    assert again.current == ["letter", "resume", "resume PDF", "answers"]
+    assert versions(conn, row) == before and len(calls) == 1
+    assert row["application_state"] == "approved"
+
+
+def test_prepare_regenerates_stale_and_rebuilds_pdf(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    calls = []
+    mock_letters(monkeypatch, calls)
+    fake_pdf(monkeypatch)
+    run_prepare(cfg, conn, profile, row)
+    old = {kind: materials.latest(conn, row["id"], kind)["id"] for kind in ("letter", "resume")}
+    profile.specialties.append("changed preference")
+    result = run_prepare(cfg, conn, profile, row)
+    assert result.created == ["letter", "resume", "resume PDF", "answers"]
+    assert len(calls) == 2
+    for kind, previous in old.items():
+        assert materials.latest(conn, row["id"], kind)["id"] != previous
+    assert applications.approve(cfg, conn, profile, row)
+    item = materials.latest(conn, row["id"], "resume")
+    Path(item["pdf_path"]).write_bytes(b"tampered")
+    result = run_prepare(cfg, conn, profile, row)
+    assert result.created == ["resume PDF"] and len(calls) == 2
+
+
+def test_prepare_never_replaces_edited_files(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    calls = []
+    mock_letters(monkeypatch, calls)
+    fake_pdf(monkeypatch)
+    run_prepare(cfg, conn, profile, row)
+    before = versions(conn, row)
+    letter = materials.latest(conn, row["id"], "letter")
+    resume_item = materials.latest(conn, row["id"], "resume")
+    Path(letter["path"]).write_text("My own letter.")
+    Path(resume_item["path"]).write_text(resume_item["content"] + "\nEdited.\n")
+    profile.specialties.append("stale too")
+    result = run_prepare(cfg, conn, profile, row)
+    assert f"letter file changed; run bio-jobs import {row['id']} --kind letter" in "".join(
+        result.problems
+    )
+    assert any("--kind resume" in problem for problem in result.problems)
+    assert "resume" not in result.created and "resume PDF" not in result.created
+    assert len(calls) == 1
+    assert [v for v in versions(conn, row) if v["kind"] != "answers"] == [
+        v for v in before if v["kind"] != "answers"
+    ]
+    assert Path(letter["path"]).read_text() == "My own letter."
+
+
+def test_prepare_command_non_interactive_lists_questions(preparation, conn, monkeypatch):
+    from app.store import override_score
+
+    cfg, _profile, rows = preparation
+    row = rows[0]
+    override_score(conn, row["id"], 90, "apply", "Synthetic review")
+    answers.add_question(conn, row["id"], "Notice period?")
+    mock_letters(monkeypatch, [])
+    fake_pdf(monkeypatch)
+    monkeypatch.setattr(cli, "Settings", lambda: cfg)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Unexpected prompt"))
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    assert cli.main(["prepare", str(row["id"])]) == 0
+    text = output.getvalue()
+    assert "Prepared: letter, resume, resume PDF, answers" in text
+    assert "Claim: I developed cell assays." in text
+    assert "Notice period?" in text and f"bio-jobs prepare {row['id']}" in text
+    for kind in ("letter", "resume", "answers"):
+        assert materials.latest(conn, row["id"], kind)
+
+
+def test_prepare_command_asks_only_unanswered(preparation, conn, monkeypatch):
+    from app.store import override_score
+
+    cfg, _profile, rows = preparation
+    row = rows[0]
+    override_score(conn, row["id"], 90, "apply", "Synthetic review")
+    answers.save_answer(cfg, "Right to work in the UK?", "Yes")
+    answers.add_question(conn, row["id"], "Right to work in the UK?")
+    answers.add_question(conn, row["id"], "Notice period?")
+    mock_letters(monkeypatch, [])
+    fake_pdf(monkeypatch)
+    monkeypatch.setattr(cli, "Settings", lambda: cfg)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "One month")
+    monkeypatch.setattr(cli, "console", Console(file=io.StringIO(), width=200))
+    assert cli.main(["prepare", str(row["id"])]) == 0
+    assert len(asked) == 1
+    draft_items = yaml.safe_load(materials.latest(conn, row["id"], "answers")["content"])["items"]
+    assert [i["answer"] for i in draft_items] == [["Yes"], ["One month"]]
+    assert not json.loads(materials.latest(conn, row["id"], "answers")["warnings"])
+
+
+@pytest.mark.parametrize("response,approved", [("approve", True), ("no", False)])
+def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, response, approved):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = "auto"
+    calls = []
+    mock_letters(monkeypatch, calls)
+    fake_pdf(monkeypatch)
+    keys = iter("aq")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or response)
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    cli._review(conn, [row], cfg, profile)
+    text = output.getvalue()
+    assert "Prepare letter first" not in text
+    assert "Claim: I developed cell assays." in text
+    assert prompts == ["Type approve to approve these materials: "]
+    assert len(calls) == 1
+    assert bool(conn.execute("SELECT 1 FROM application_approvals").fetchone()) is approved
+    assert ("Approval cancelled; materials kept." in text) is not approved
+    for kind in ("letter", "resume", "answers"):
+        assert materials.latest(conn, row["id"], kind)
+
+
+def test_review_approve_with_current_materials_needs_no_extra_prompt(
+    preparation, conn, monkeypatch
+):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = "auto"
+    ready(cfg, conn, profile, row, monkeypatch)
+    before = versions(conn, row)
+    keys = iter("aq")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Unexpected prompt"))
+    monkeypatch.setattr(cli, "console", Console(file=io.StringIO(), width=200))
+    cli._review(conn, [row], cfg, profile)
+    assert row["application_state"] == "approved"
+    assert versions(conn, row) == before
+
+
+def test_review_approve_keeps_import_message_for_edited_file(preparation, conn, monkeypatch):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    ready(cfg, conn, profile, row, monkeypatch)
+    letter = materials.latest(conn, row["id"], "letter")
+    Path(letter["path"]).write_text("Edited outside the app.")
+    keys = iter("aq")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    monkeypatch.setattr("builtins.input", lambda _: "approve")
+    output = io.StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    cli._review(conn, [row], cfg, profile)
+    text = output.getvalue()
+    assert f"run bio-jobs import {row['id']} --kind letter" in text
+    assert "Approval not recorded." in text
+    assert not conn.execute("SELECT 1 FROM application_approvals").fetchone()
+    assert Path(letter["path"]).read_text() == "Edited outside the app."

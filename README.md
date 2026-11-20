@@ -24,7 +24,7 @@ uv run bio-jobs extract-profile --force
 # Review config/candidate.yaml and set reviewed: true before continuing.
 uv run bio-jobs scan
 uv run bio-jobs list
-uv run bio-jobs review
+uv run bio-jobs review   # a prepares any missing letter, CV and answers, then approves
 ```
 
 `bio-jobs` or `bio-jobs help` shows commands without network access. On the first operational run without `config.yaml`, the wizard opens automatically in a terminal; noninteractive runs print a setup instruction. Discovery does not call an LLM. Profile extraction and scoring send candidate facts and job text to the configured LLM; setup, `llm-check`, and `doctor --online` send small connection checks. Install and authenticate the CLI you select (OpenCode, Pi, Codex or Claude Code); the script does not install those applications.
@@ -66,9 +66,10 @@ Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` a
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
+| `prepare <job>` | Create any missing or stale letter, resume, resume PDF (with ATS check) and screening draft; show the letter claims; ask only the screening questions `answers.yaml` cannot answer |
 | `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
 | `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
-| `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **q** quit; shows dimension and must-have evidence |
+| `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |
 | `export <file.csv>` | Export matching stored jobs, review decisions and provenance |
 | `stats` | Job/review counts, source health, LLM calls, tokens and known costs |
 | `llm-check` | One tiny schema-validated request with configured failover |
@@ -141,7 +142,22 @@ Descriptions are untrusted data: HTML is converted to plain text, and scoring pr
 
 Preparation uses your reviewed candidate profile and its matching resume hash. Run
 `extract-profile`, review the facts and set `reviewed: true` before generating materials.
-Job preferences never count as qualifications. Prepare a scored job like this:
+Job preferences never count as qualifications. Prepare a scored job in one step:
+
+```bash
+uv run bio-jobs prepare 42              # everything missing or stale, then the open questions
+uv run bio-jobs review                  # or simply press a on the job: it prepares first
+```
+
+`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its
+ATS check and the screening draft, but only for pieces that are missing or stale; current
+materials stay as they are, with no new versions. It then shows the letter with each claim
+and its cited facts, plus any warnings, and asks only the screening questions the answer
+bank cannot answer. Without an interactive terminal it prepares everything it can, lists
+the unanswered questions and prints the command to run in a terminal. A material file you
+edited is never replaced: preparation stops with the `import` command to run first.
+
+The single commands remain for redoing one piece:
 
 ```bash
 uv run bio-jobs letters                 # batches jobs at analyst.min_score
@@ -213,12 +229,14 @@ Additional keys are:
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |
-| `a` | Approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
+| `a` | Prepare any missing or stale materials (as `prepare` does), show anything new for confirmation, then approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
 | `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
 Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
-explicit acknowledgement of any material or ATS warnings. Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Missing or stale materials, changed files or answers, cooldowns, and score and limit gates remain blockers. It only marks the
+explicit acknowledgement of any material or ATS warnings. When `a` had to prepare anything,
+review shows the new materials and asks you to type `approve` before recording approval.
+Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Edited material files, cooldowns, and score and limit gates remain blockers; missing or stale materials are prepared first. It only marks the
 job approved; browser execution is a separate `apply` command. Saving a review decision
 also initializes the application state to `saved`. States are `saved`, `preparing`,
 `awaiting_review`, `approved`, `blocked`, `manual_required`, `withdrawn`, `submitting`,
@@ -333,7 +351,7 @@ invalid single-job answers receive one repair attempt and may use the configured
 fallback. Cut-off answers may also use that fallback without a quota cooldown.
 Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `resume` / `answers`), inspect the diff and type `import`. This creates a new version and requires review; a new resume needs a fresh PDF. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.
 Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or tailored CVs or filling forms.
-Long-running scan, analyze, letters, watch, autopilot and apply commands prevent idle sleep on
+Long-running scan, analyze, letters, prepare, watch, autopilot and apply commands prevent idle sleep on
 macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already
 running are allowed to finish and their results are saved, with saved and unfinished job IDs
 reported. A second Ctrl+C exits immediately. Interrupted submissions retain their existing
