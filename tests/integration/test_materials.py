@@ -965,3 +965,106 @@ def test_review_approve_keeps_import_message_for_edited_file(
     assert "Approval not recorded." in text
     assert not conn.execute("SELECT 1 FROM application_approvals").fetchone()
     assert Path(letter["path"]).read_text() == "Edited outside the app."
+
+
+def gated(preparation, conn, monkeypatch, console_output, *, mode, answers_given, keys="aq"):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.apply.mode = mode
+    cfg.analyst.min_score = 50
+    row["score"] = 45
+    review_job(conn, row["id"], "rejected")
+    row["review"] = "rejected"
+    calls = []
+    mock_letters(monkeypatch, calls)
+    pressed = iter(keys)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: next(pressed))
+    replies = iter(answers_given)
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or next(replies))
+    output = io.StringIO()
+    console_output(output, width=300)
+    cli._review(conn, [row], cfg, profile)
+    return cfg, row, calls, prompts, output.getvalue()
+
+
+def test_review_apply_anyway_on_rejected_low_score_job(
+    console_output, preparation, conn, monkeypatch
+):
+    cfg, row, calls, prompts, text = gated(
+        preparation,
+        conn,
+        monkeypatch,
+        console_output,
+        mode="dry_run",
+        answers_given=["y", "approve"],
+    )
+    assert prompts[0] == "This job is rejected and scored 45, below 50. Apply anyway? [y/N] "
+    assert "Override recorded: approved by person in review despite rejection and low score" in text
+    override = conn.execute("SELECT * FROM score_overrides WHERE job_id=?", (row["id"],)).fetchone()
+    assert (override["score"], override["recommendation"], override["attended"]) == (45, "apply", 1)
+    decision = conn.execute("SELECT decision FROM job_reviews WHERE job_id=?", (row["id"],))
+    assert decision.fetchone()[0] == "saved"
+    assert len(calls) == 1
+    assert row["application_state"] == "approved"
+    assert conn.execute("SELECT 1 FROM application_approvals").fetchone()
+    # Unattended runs and auto mode keep the score gate despite the person's override.
+    with pytest.raises(ValueError, match="automatic submission never applies"):
+        applications.check_gates(cfg, conn, row, unattended=True)
+    cfg.apply.mode = "auto"
+    with pytest.raises(ValueError, match="below"):
+        applications.check_gates(cfg, conn, row)
+
+
+def test_review_apply_anyway_declined_changes_nothing(
+    console_output, preparation, conn, monkeypatch
+):
+    _cfg, row, calls, prompts, text = gated(
+        preparation, conn, monkeypatch, console_output, mode="manual", answers_given=["n"]
+    )
+    assert len(prompts) == 1 and "Apply anyway? [y/N]" in prompts[0]
+    assert "Not applied; nothing changed." in text
+    assert "Writing" not in text and "Approval not recorded" not in text
+    assert calls == []
+    assert not conn.execute("SELECT 1 FROM score_overrides").fetchone()
+    decision = conn.execute("SELECT decision FROM job_reviews WHERE job_id=?", (row["id"],))
+    assert decision.fetchone()[0] == "rejected"
+    assert not materials.latest(conn, row["id"], "letter")
+
+
+def test_review_auto_mode_keeps_score_gate_and_asks_only_about_rejection(
+    console_output, preparation, conn, monkeypatch
+):
+    _cfg, row, calls, prompts, text = gated(
+        preparation, conn, monkeypatch, console_output, mode="auto", answers_given=["y"]
+    )
+    assert prompts == ["This job is rejected. Apply anyway? [y/N] "]
+    assert "automatic submission never applies below it" in text
+    assert "Writing" not in text and calls == []
+    assert not conn.execute("SELECT 1 FROM score_overrides WHERE attended=1").fetchone()
+    assert "moved back to saved" in text and row["review"] == "saved"
+
+
+@pytest.mark.parametrize("rejected", [True, False])
+def test_prepare_gated_job_gives_reason_and_override_command(
+    console_output, preparation, conn, monkeypatch, rejected
+):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.analyst.min_score = 50
+    if rejected:
+        review_job(conn, row["id"], "rejected")
+        row["review"] = "rejected"
+    else:
+        row["score"] = 45
+    calls = []
+    mock_letters(monkeypatch, calls)
+    output = io.StringIO()
+    console_output(output, width=300)
+    result = cli._prepare(conn, row, cfg, profile, interactive=False)
+    text = output.getvalue()
+    assert calls == [] and "Writing" not in text and "Could not read" not in text
+    reason = "is rejected" if rejected else "scored 45, below 50"
+    assert reason in result.problems[0]
+    assert f"bio-jobs review --status all --all-scores --job {row['id']} and press a" in text

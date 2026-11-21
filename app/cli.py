@@ -224,6 +224,9 @@ def _review(conn, rows, cfg=None, profile=None):
                             )
                             _show_materials(conn, row, profile)
                     elif action == "a":
+                        # A rejected or low-scoring job asks once; on no nothing changes.
+                        if not _apply_anyway(cfg, conn, row):
+                            continue
                         # Gates first, so ineligible jobs never spend LLM calls on materials.
                         applications.check_gates(cfg, conn, row, used=approved_this_run)
                         applications.check_company(cfg, conn, row)
@@ -373,6 +376,40 @@ def _review(conn, rows, cfg=None, profile=None):
                 break
 
 
+def _apply_anyway(cfg, conn, row):
+    """Ask once before a on a rejected or low-scoring job; yes records the person's override.
+
+    In attended modes the person's approval is the check. Auto mode keeps the score gate,
+    so there only a rejection is asked about and check_gates explains the score.
+    """
+    reasons = applications.gate_reasons(cfg, row)
+    if cfg.apply.mode == "auto":
+        reasons = [r for r in reasons if r == "rejected"]
+    if not reasons:
+        return True
+    answer = input(f"This job is {' and '.join(reasons)}. Apply anyway? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        console.print("Not applied; nothing changed.")
+        return False
+    why = ["rejection" if r == "rejected" else "low score" for r in reasons]
+    reason = "approved by person in review despite " + " and ".join(why)
+    if row.get("review") == "rejected":
+        review_job(conn, row["id"], "saved")
+        row["review"] = "saved"
+    if "low score" not in why:
+        console.print(_text(f"Override recorded: {reason}; moved back to saved.", "green"))
+        return True
+    override_score(conn, row["id"], row["score"], "apply", reason, attended=True)
+    row["override"] = {
+        "score": row["score"],
+        "recommendation": "apply",
+        "reason": reason,
+        "attended": 1,
+    }
+    console.print(_text(f"Override recorded: {reason}.", "green"))
+    return True
+
+
 def _show_materials(conn, row, profile=None, cfg=None):
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
     console.print(f"Application: {current[0] if current else 'unprepared'}")
@@ -416,10 +453,13 @@ def _show_materials(conn, row, profile=None, cfg=None):
 
 def _prepare(conn, row, cfg, profile, *, interactive, show="created"):
     """Create missing/stale materials, show them, then ask unanswered screening questions."""
-    from app.prepare import prepare_answers, prepare_materials
+    from app.prepare import Prepared, gate_problem, prepare_answers, prepare_materials
 
     say = log
-
+    # The gate is checked first: a rejected or low-scoring job gets its reason, not progress lines.
+    if gated := gate_problem(cfg, row):
+        say(fail("Not prepared: " + gated))
+        return Prepared(problems=[gated])
     result = prepare_materials(cfg, conn, profile, row, output=say)
     if show == "always" or result.created:
         _show_materials(conn, row, profile, cfg)
@@ -854,10 +894,12 @@ def _run(args, cfg):
             selected = [r for r in ranked if not args.job or r["id"] == args.job]
             if args.job and not selected:
                 raise ValueError("Unknown or ineligible job ID")
-            if args.job and (
-                selected[0].get("score") is None or selected[0]["score"] < cfg.analyst.min_score
-            ):
+            if args.job and applications.below_score(cfg, selected[0]):
                 raise ValueError(applications.score_gate_message(cfg, selected[0]))
+            if args.job and args.command == "letters" and selected[0].get("review") == "rejected":
+                from app.prepare import gate_problem
+
+                raise ValueError(gate_problem(cfg, selected[0]))
             if args.command == "prepare":
                 header(f"Prepare job {selected[0]['id']}")
                 result = _prepare(

@@ -539,8 +539,7 @@ def run(
     ]
     if job:
         row = next(r for r in rows if r["id"] == job)
-        threshold = applications.score_threshold(cfg, unattended=unattended)
-        if row.get("score") is None or row["score"] < threshold:
+        if applications.below_score(cfg, row, apply=True, unattended=unattended):
             raise ValueError(
                 applications.score_gate_message(cfg, row, apply=True, unattended=unattended)
             )
