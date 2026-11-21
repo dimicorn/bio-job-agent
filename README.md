@@ -37,11 +37,13 @@ uv run bio-jobs review   # a prepares any missing letter and answers, then appro
 
 `scan` refreshes every enabled source and scores new or changed eligible jobs; `sync` only refreshes and `analyze` only scores stored jobs. Discovery itself does not call an LLM or use a browser.
 
-`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--since YYYY-MM-DD`, `--status`, `--application-state`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs and applications in progress remain in the default review queue, even when unscored; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
+`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--job`, `--since YYYY-MM-DD`, `--status`, `--application-state`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs and applications in progress remain in the default review queue, even when unscored; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
 
 Scores use configurable weights: specialization 30, technical 20, seniority/leadership 15, industry/therapeutic area 10, geography 10, research outcomes 10, salary/arrangements 5. Weights must sum to 100. The LLM supplies dimension ratings with evidence; the application computes the total (nearest integer, halves up). An unknown dimension contributes neutral 50 and always carries an uncertainty flag. Missing qualifications mean an **unknown** must-have, never an unmet requirement; unmet requires explicit candidate evidence. Recommendations follow score bands: apply ≥70, maybe ≥50, skip <50. Confidence remains separate from score; even a high score can need factual checks. Model judgments still require human review.
 
 `analyst.batch_size` and `analyst.parallel` control scoring batches. Each evaluation stores the scoring version, content hash and reviewed profile version. Unchanged inputs reuse the saved evaluation; changes to job content, profile, preferences, weights or provider settings trigger scoring again. Old evaluations remain as history and are hidden when stale. User overrides store a separate score, recommendation and reason without rewriting model evidence. Failed batches remain unscored and `analyze` exits with an error; completed batches survive for the next run. `stats` groups tokens and costs by backend, model and purpose (`score`, `profile`, checks).
+
+Next to the LLM score, `list`, `review` and `export` show a **resume keyword match** computed without any LLM call: the share of the job's biotech/pharma R&D keywords (techniques, assays, modalities, therapeutic areas, platforms, multiword terms such as "flow cytometry" or "single-cell RNA-seq", and acronyms from the job text) that also appear in `resume.md`, with the top present and missing ones. Benefits, EEO, privacy and company-blurb text is ignored, and case, plurals, hyphens, British spellings and common abbreviations are folded together. The result is cached per job and recomputed when the job text or `resume.md` changes. It is informational only: it never changes the LLM score, the score gate or any filter. See [docs/keywords.md](docs/keywords.md).
 
 ```sh
 uv run bio-jobs list --employer Mytos --location London
@@ -58,6 +60,17 @@ Scoring failures identify the job, backend, model, safe validation paths or fail
 category, and a next step in command output and `stats`. Failed batches are split once;
 invalid single-job answers receive one repair attempt and may use the configured
 fallback. Cut-off answers may also use that fallback without a quota cooldown.
+
+### Add one job by link
+
+```sh
+uv run bio-jobs add https://job-boards.greenhouse.io/<board>/jobs/<id>
+uv run bio-jobs add https://careers.example.com/jobs/senior-scientist --employer "Example Bio"
+```
+
+`add` stores one posting you found yourself. Greenhouse (`boards.greenhouse.io`, `job-boards.greenhouse.io`, embedded `job_app?for=…&token=…`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`) and Workable (`apply.workable.com/<account>/j/<code>`, `<account>.workable.com/j/<code>`) links are read through the same public APIs and adapters as discovery; Ashby and Workable have no single-posting API, so their public board is read once. Any other https page is fetched once (GET only, robots.txt, pacing and timeouts as discovery, no redirects followed) and reduced to plain text: job markup (`JobPosting`) when present, otherwise the page title, heading and main text. Page content is untrusted data and is never followed or executed. `--employer` names the employer when the page or ATS does not.
+
+The job is stored with an origin marked as added by link (source `link-<employer>`), deduplicated against stored jobs, scored when the profile is reviewed, and the command prints its job ID, score and `uv run bio-jobs review --job <ID>`. The employer need not be on the watchlist. When the industry (not on the reviewed watchlist), role, seniority, geography or freshness filter would normally exclude it, the job is still stored, `add`, `list` and `review` say which filters apply, and it stays in review (bypassing the score gate) for you to save or reject. Adding the same link again, or a link to a job already stored, reports the existing job without fetching. A probable duplicate of a stored job joins it as another origin. Failures (unreachable page, robots.txt disallow, HTTP errors, redirects, no job text) print a plain message and a next step. Jobs added by link are not expired by later syncs; reject them in review when they close.
 
 ### Fresh postings
 
@@ -87,17 +100,19 @@ Every generated claim cites reviewed facts and is checked for unsupported conten
 
 ### Apply
 
-Applications default to `apply.mode: manual`, which opens the apply link for you to complete. Assisted and auto modes use Playwright-driven Chromium on supported Greenhouse, Lever, Workable and Ashby forms, only for jobs you explicitly approved:
+Applications default to `apply.mode: manual`, which opens the apply link for you to complete. Assisted, auto and dry-run modes drive your installed Google Chrome (or Playwright Chromium when Chrome is missing) on a separate private profile, typing at a person's pace, on supported Greenhouse, Lever, Workable and Ashby forms, only for jobs you explicitly approved:
 
 - **manual**: opens the link; record a submission you completed with `t` in review.
 - **assisted**: fills and verifies the form, then waits for you to press Submit.
 - **auto**: presses Submit once and waits for an acknowledgement; runs only within `active_hours` and score, daily and per-run limits.
+- **dry_run**: fills and verifies the form, saves a screenshot in the job's materials folder and closes it without pressing Submit; the job stays approved and no limit or cooldown is used.
 
 ```sh
 uv run bio-jobs apply 42      # one previously approved job
 uv run bio-jobs apply         # approved queue, bounded by max_per_run
 uv run bio-jobs autopilot     # auto mode: sync/score, then consume approved queue
 uv run bio-jobs run --no-scan # alias; use stored approved queue only
+uv run bio-jobs apply 42 --mode dry_run   # rehearse: fill and screenshot, never Submit
 ```
 
 Sensitive questions (visa, work authorization, legal declarations, demographics, assessments) are only filled from your stored answers, never by the LLM. Sign-in, MFA, visible CAPTCHA and unknown required questions stop the job for you; nothing is bypassed. A missing acknowledgement becomes `unknown_result` and is never retried automatically. A per-employer cooldown (`apply.company_cooldown_days`, default 30) prevents repeat applications. See [docs/applications.md](docs/applications.md) for the answers bank, per-ATS form filling, blocked-field explanations and submission safeguards.
@@ -110,21 +125,22 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `doctor [--online]` | Local setup, resume and source health with a reason per check and one next step; opt in to live LLM checks |
 | `firms [--validate]` | List the reviewed employer watchlist; explicitly reverify public boards with `--validate` |
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
+| `add <url> [--employer NAME]` | Add one job by link (Greenhouse, Lever, Ashby, Workable or any job page), score it and print the review command |
 | `extract-profile [--output path] [--force]` | Extract resume facts and an evidenced header name into an unreviewed YAML profile; retains edited names and title/geography preferences; refuses replacement without `--force` |
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
-| `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
+| `list` | Highest fit score first; score, evidence, gaps, uncertainty, resume keyword match, dates and apply link |
 | `prepare <job>` | Create any missing or stale letter and screening draft, check the resume PDF; show the letter claims; read the application form's questions and ask those `answers.yaml` cannot answer |
 | `resume` | Check the resume PDF that applications upload unchanged |
 | `resume-from-pdf [--pdf path] [--force]` | Write `resume.md` from the resume PDF's text; never replaces a filled `resume.md` without `--force` |
-| `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
-| `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
+| `apply [job] [--mode dry_run]` | Fill one approved job or the approved queue in the configured apply mode; `--mode dry_run` never submits |
+| `autopilot` / `run [--no-scan] [--mode dry_run]` | One bounded auto pass; refresh and score first unless `--no-scan` |
 | `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |
 | `letters`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Optionally redo one material, compare, import and track application materials ([docs/applications.md](docs/applications.md)) |
 | `unmerge JOB ORIGIN` | Separate a non-canonical origin from a grouped job |
 | `feed-review <feed.json>` | Experimental offline lead review ([docs/feed-review.md](docs/feed-review.md)) |
-| `export <file.csv>` | Export matching stored jobs, review decisions and provenance |
+| `export <file.csv>` | Export matching stored jobs, review decisions, resume keyword match and provenance |
 | `stats` | Job/review counts, source health, LLM calls, tokens and known costs |
 | `llm-check` | One tiny schema-validated request with configured failover |
 | `init` / `import-profile [path]` | Initialise/migrate SQLite or version a candidate profile |
@@ -134,6 +150,15 @@ under the gitignored `run-summaries/` directory with run IDs,
 source outcomes, job changes, scoring failures, application transitions, and notification
 results. Summaries contain IDs and error categories, never CVs, answers, credentials, or provider
 response text. A summary left in `running` state indicates the process did not finish cleanly.
+These commands end with one compact line counting the same things, for example
+`09:14:02 scan done: 6 sources (1 error, 5 ok) · jobs 3 new · scored 3`.
+
+Run progress is printed as timestamped lines under a header for each phase (Sync, Score,
+Letters, Prepare, Apply, Alerts); lines from parallel workers carry the worker name in bold.
+Outcomes are coloured: green `✓` done or filled, yellow `!` warning, yellow `⊘` blocked or left
+for you, red `✗` failed, dim detail. Job and employer text is shown literally, never as
+terminal styling. Output is plain text when redirected (for example to `logs/watch.log`) or when
+`NO_COLOR` is set; the timestamps and symbols stay.
 
 Long-running scan, analyze, letters, prepare, watch, autopilot and apply commands prevent idle sleep on
 macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already
@@ -183,7 +208,7 @@ A vacancy closes after its origin is absent from **two complete successful snaps
 
 Rerun `./setup.sh` to optionally install or update a macOS LaunchAgent (default **no**). Choose one or two distinct local hours; it uses the repository template `launchd/ru.bio-job-agent.watch.plist`, sets PATH for `~/.local/bin` and `/opt/homebrew/bin`, writes `logs/watch.log`, and does not run at load time. The script prints the exact `launchctl unload` command. Declining leaves an existing schedule unchanged. Linux prints a ready-to-copy cron entry and never modifies crontab; create the indicated logs directory first. The project directory must remain at the installed path.
 
-Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` adds the existing bounded autopilot queue pass; it still requires prior explicit approvals, current materials, active hours, score/limit gates and submission confirmation. Manual and assisted modes only sync, score and alert. Watch does not generate approvals or materials. A database-specific kernel file lock prevents overlapping watch passes, including their auto-apply phase. Process exit/crash releases it automatically; a retained lock file is harmless. SQLite state and the installed schedule survive restarts; the next scheduled or manual run proceeds normally.
+Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` adds the existing bounded autopilot queue pass; it still requires prior explicit approvals, current materials, active hours, score/limit gates and submission confirmation. Manual, assisted and dry-run modes only sync, score and alert. Watch does not generate approvals or materials. A database-specific kernel file lock prevents overlapping watch passes, including their auto-apply phase. Process exit/crash releases it automatically; a retained lock file is harmless. SQLite state and the installed schedule survive restarts; the next scheduled or manual run proceeds normally.
 
 ## Source operation, privacy and safety
 

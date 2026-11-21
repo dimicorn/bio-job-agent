@@ -64,12 +64,15 @@ def prevent_sleep():
             process.wait()
 
 
-def completed_batches(batches, workers, submit):
-    """Yield completed batches; after a stop, drain only already running requests."""
+def completed_batches(batches, workers, submit, name="worker"):
+    """Yield completed batches; after a stop, drain only already running requests.
+
+    Worker threads are named after the work (score_0, letters_1...) so their console
+    lines carry that name."""
     global _cooperative
     _cooperative = True
     try:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=name) as executor:
             remaining = iter(batches)
             futures = {}
 
@@ -94,9 +97,13 @@ def completed_batches(batches, workers, submit):
 def interrupted_summary(kind, done_ids, all_ids):
     if requested():
         unfinished = [item for item in all_ids if item not in done_ids]
-        print(
-            f"Interrupted {kind}: saved {done_ids}; unfinished {unfinished}; "
-            f"exit code {exit_code()}.",
-            file=sys.stderr,
+        from app.console import err_console, log, warn
+
+        log(
+            warn(
+                f"Interrupted {kind}: saved {done_ids}; unfinished {unfinished}; "
+                f"exit code {exit_code()}."
+            ),
+            target=err_console,
         )
         raise KeyboardInterrupt

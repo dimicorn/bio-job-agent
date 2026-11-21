@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +57,19 @@ class Analyst(BaseModel):
     output_cost_per_million: float | None = Field(default=None, ge=0)
 
 
+def _bounds(value):
+    """A [min, max] pair; a single number means a fixed value."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        value = (value, value)
+    low, high = value
+    if not 0 <= low <= high:
+        raise ValueError("use [min, max] with 0 <= min <= max")
+    return (low, high)
+
+
+Bounds = Annotated[tuple[float, float], BeforeValidator(_bounds)]
+
+
 class Search(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_posting_age_days: int | None = Field(default=7, ge=0)
@@ -64,7 +77,7 @@ class Search(BaseModel):
 
 class Apply(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["manual", "assisted", "auto"] = "manual"
+    mode: Literal["manual", "assisted", "auto", "dry_run"] = "manual"
     auto_consent: bool = False
     auto_llm_answers: bool = False
     company_cooldown_days: int = Field(default=30, ge=0)
@@ -73,11 +86,14 @@ class Apply(BaseModel):
     min_score: int = Field(default=80, ge=0, le=100)
     active_hours: tuple[int, int] = (8, 23)
     answers_file: Path = Path("answers.yaml")
+    browser_channel: Literal["chrome", "chromium"] = "chrome"
     profile_dir: Path = Path("data/browser-profile")
     audit_dir: Path = Path("debug/apply")
     submit_wait_minutes: float = Field(default=10, gt=0, le=120)
     confirmation_timeout_seconds: float = Field(default=45, gt=0, le=300)
-    action_seconds: float = Field(default=0.3, ge=0, le=10)
+    read_seconds: Bounds = (3, 8)
+    action_seconds: Bounds = (0.5, 1.5)
+    typing_delay_ms: Bounds = (30, 90)
 
     @model_validator(mode="after")
     def hours(self):

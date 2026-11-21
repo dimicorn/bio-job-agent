@@ -247,11 +247,13 @@ def attach_evaluations(conn, cfg, profile, rows):
     )
 
 
-def analyze_new(cfg, conn, profile, sources):
+def analyze_new(cfg, conn, profile, sources, job_ids=None):
     from app.store import list_jobs
 
     require_reviewed(cfg, profile)
     rows = list_jobs(conn, profile, sources, cfg, prospects_only=True)
+    if job_ids is not None:
+        rows = [r for r in rows if set(r.get("grouped_job_ids", [r["id"]])) & set(job_ids)]
     pending = [(row, content_hash(cfg, profile, row)) for row in rows]
     pending = [
         (r, h)
@@ -284,7 +286,10 @@ def analyze_new(cfg, conn, profile, sources):
             return [(batch, None, exc)]
 
     for _, future in stop.completed_batches(
-        batches, cfg.analyst.parallel, lambda executor, batch: executor.submit(score_batch, batch)
+        batches,
+        cfg.analyst.parallel,
+        lambda executor, batch: executor.submit(score_batch, batch),
+        name="score",
     ):
         for batch, results, exc in future.result():
             if exc is not None:

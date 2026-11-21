@@ -8,14 +8,13 @@ import sys
 import httpx
 import yaml
 from dotenv import set_key
-from rich.console import Console
 
 from app.candidate.profile import import_profile, load_profile
+from app.console import console
 from app.db import connect, migrate
 from app.llm import check, fallback_cfg
 from app.settings import ROOT, Analyst, Apply, Settings
 
-console = Console(markup=False)
 # Scoring choices shared by primary and fallback; fallback_settings must never override them.
 SHARED = (
     "preferences",
@@ -189,7 +188,7 @@ def setup(cfg: Settings) -> bool:
         )
     if "apply" not in document or _yes("Change the apply settings?"):
         apply = Apply.model_validate(document.get("apply", {}))
-        modes = ["manual", "assisted", "auto"]
+        modes = ["manual", "assisted", "auto", "dry_run"]
         apply.mode = modes[_pick("Apply mode (assisted/auto use manual handoff until M4):", modes)]
         for field in ("daily_limit", "max_per_run", "min_score"):
             while True:

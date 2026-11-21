@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app import analyst
+from app.console import fail, header, log, ok, warn
 from app.pipeline.discover import discover, utcnow
 from app.resume import digest, require_reviewed
 from app.store import list_jobs
@@ -182,7 +183,7 @@ def queue_alerts(cfg, conn, rows):
         raise
 
 
-def deliver_pending(cfg, conn, output=print):
+def deliver_pending(cfg, conn, output=log):
     """Export committed digests again after a crash; never repeat an uncertain external attempt."""
     directory = cfg.resolved(cfg.watch.digest_dir)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -226,7 +227,7 @@ def deliver_pending(cfg, conn, output=print):
                     (type(exc).__name__, batch["id"]),
                 )
                 conn.commit()
-                output(f"{channel} alert failed ({type(exc).__name__}); digest: {path}")
+                output(fail(f"{channel} alert failed ({type(exc).__name__}); digest: {path}"))
             else:
                 result = (
                     "unsupported"
@@ -237,10 +238,10 @@ def deliver_pending(cfg, conn, output=print):
     return errors
 
 
-def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discovery_options):
+def run(cfg, conn, profile, sources, *, scheduled=False, output=log, **discovery_options):
     with run_lock(cfg.resolved(cfg.database_path)) as acquired:
         if not acquired:
-            output("Another watch pass is running; skipped.")
+            output(warn("Another watch pass is running; skipped."))
             return {"skipped": True, "notified": 0}
         require_reviewed(cfg, profile)
         if cfg.watch.telegram and (
@@ -257,6 +258,7 @@ def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discove
                 {"channel": channel, "result": "no_attempt" if enabled else "disabled"},
             )
         delivery_errors = deliver_pending(cfg, conn, output)
+        header("Sync")
         results = discover(
             conn,
             profile,
@@ -266,27 +268,32 @@ def run(cfg, conn, profile, sources, *, scheduled=False, output=print, **discove
             **discovery_options,
         )
         scoring_error = None
+        header("Score")
         try:
             scored = analyst.analyze_new(cfg, conn, profile, sources)
         except RuntimeError as exc:
             scored, scoring_error = 0, str(exc)
-            output(scoring_error)
+            output(fail(scoring_error))
         ranked = analyst.attach_evaluations(
             conn, cfg, profile, list_jobs(conn, profile, sources, cfg, prospects_only=True)
         )
+        header("Alerts")
         notified = queue_alerts(cfg, conn, ranked)
         delivery_errors += deliver_pending(cfg, conn, output)
         if scheduled and cfg.apply.mode == "auto" and not scoring_error:
             from app.autopilot import run as apply_run
 
+            header("Apply")
             queue = analyst.attach_evaluations(
                 conn, cfg, profile, list_jobs(conn, profile, sources, cfg)
             )
             apply_run(cfg, conn, profile, queue, output=output, unattended=True)
         errors = sum(r["status"] in ("error", "partial") for r in results)
         output(
-            f"Watch: {len(results)} sources, {errors} source errors/partial; scored {scored}; "
-            f"{notified} new/changed alerts; digests: {cfg.resolved(cfg.watch.digest_dir)}"
+            (warn if errors or delivery_errors or scoring_error else ok)(
+                f"Watch: {len(results)} sources, {errors} source errors/partial; scored {scored}; "
+                f"{notified} new/changed alerts; digests: {cfg.resolved(cfg.watch.digest_dir)}"
+            )
         )
         return {
             "sources": results,

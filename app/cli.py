@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import json
 import logging
-import re
 import sqlite3
 import sys
 import webbrowser
@@ -13,12 +12,13 @@ from pathlib import Path
 
 import httpx
 import yaml
-from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from app import answers, applications, materials, stop
+from app import answers, applications, keywords, materials, stop
 from app.candidate.profile import import_profile, load_profile
+from app.console import Handler, console, fail, header, log, ok, run_summary, summary, warn
+from app.console import text as _text
 from app.db import connect, migrate
 from app.pipeline.discover import discover
 from app.resume import digest
@@ -28,13 +28,7 @@ from app.sources.feed_review import register_feed_review_command, run_feed_revie
 from app.sources.firms import register_firms_command, run_firms_command
 from app.store import export_csv, list_jobs, override_score, review_job
 
-console = Console(markup=False)
-
-
-def _text(value) -> Text:
-    # Source data must not become Rich markup or terminal escape sequences.
-    value = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", str(value or ""))
-    return Text(re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", value))
+STATUS_STYLE = {"ok": "green", "partial": "yellow", "error": "red", "cooldown": "dim"}
 
 
 def _positive(value):
@@ -56,6 +50,7 @@ def _filters(parser, *, review=False):
     parser.add_argument("--employer", help="Employer contains this text")
     parser.add_argument("--location", help="Location contains this text")
     parser.add_argument("--source", help="Source ID")
+    parser.add_argument("--job", type=_positive, help="Only this job ID")
     parser.add_argument("--since", type=_date, help="Discovered on/after YYYY-MM-DD")
     parser.add_argument(
         "--status",
@@ -80,9 +75,13 @@ def _select(rows, args, *, review=False, min_score=0):
             and row.get("application_state") != args.application_state
         ):
             continue
+        if getattr(args, "job", None) and args.job not in row.get("grouped_job_ids", [row["id"]]):
+            continue
+        # A job added by link is the person's own pick: it skips the score gate too.
         if (
             not args.all_scores
             and min_score > 0
+            and not row.get("added_by_link")
             and row.get("review") != "saved"
             and not row.get("application_state")
             and (row.get("score") is None or row["score"] < min_score)
@@ -125,6 +124,7 @@ def _list(rows):
         "Posted / discovered",
         "Review / application",
         "Score / evidence / gaps",
+        "Resume keywords",
         "Apply link",
         title="Jobs — highest fit score first",
         show_lines=True,
@@ -148,6 +148,7 @@ def _list(rows):
                 else ""
             ),
             _text(_score_summary(row)),
+            _text(_keyword_cell(row)),
             Text("Open", style=f"link {row['apply_url']}"),
         )
     console.print(table)
@@ -155,6 +156,8 @@ def _list(rows):
     for row in rows:
         if len(row.get("grouped_job_ids", [])) > 1:
             console.print(_text(f"{row['id']} grouped stored job IDs: {row['grouped_job_ids']}"))
+        for line in _link_lines(row)[:1]:
+            console.print(_text(f"{row['id']} {line}"))
         for origin in row["origins"]:
             console.print(
                 _text(
@@ -163,6 +166,33 @@ def _list(rows):
                 soft_wrap=True,
             )
     console.print(f"{len(rows)} matching roles. Unscored jobs have no verified matching result.")
+
+
+def _keyword_cell(row):
+    if "keywords" not in row:
+        return ""
+    if row["keywords"] is None and not row.get("keywords_resume"):
+        return "no resume.md"
+    return keywords.summary(row["keywords"])
+
+
+def _keyword_lines(row, limit=8):
+    """Informational: the LLM score, score gate and filters never use this."""
+    match = row.get("keywords")
+    if not row.get("keywords_resume"):
+        return ["Resume keywords: no resume.md to compare"]
+    if not match:
+        return ["Resume keywords: no recognised job keywords (informational)"]
+    lines = [
+        f"Resume keywords: {match['score']}% — {len(match['present'])} of {match['total']} "
+        + "job keywords are in resume.md (informational; not part of the score)"
+    ]
+    for label, key in (("In resume", "present"), ("Missing", "missing")):
+        items = match[key]
+        if items:
+            more = f" (+{len(items) - limit} more)" if len(items) > limit else ""
+            lines.append(f"  {label}: " + ", ".join(items[:limit]) + more)
+    return lines
 
 
 def _score_summary(row):
@@ -179,6 +209,18 @@ def _score_summary(row):
     if override:
         parts.append(f"User override: {override['recommendation']} — {override['reason']}")
     return "\n".join(parts)
+
+
+def _link_lines(row):
+    if not row.get("added_by_link"):
+        return []
+    notes = row.get("filter_notes") or []
+    if not notes:
+        return ["Added by link."]
+    return [
+        "Added by link; normally excluded by: " + "; ".join(notes),
+        "Kept for you to decide: save (s) or reject (r).",
+    ]
 
 
 def read_key() -> str:
@@ -212,8 +254,12 @@ def _review(conn, rows, cfg=None, profile=None):
         console.print(_text(row.get("date_label", "posting date unknown")))
         if row.get("company_cooldown_until"):
             console.print(_text(f"company cooldown until {row['company_cooldown_until'][:10]}"))
+        for line in _link_lines(row):
+            console.print(_text(line))
         console.print(_text(row["description"]))
         console.print(_text(_score_summary(row)))
+        for line in _keyword_lines(row):
+            console.print(_text(line))
         if row.get("evaluation"):
             console.print(
                 _text(
@@ -297,7 +343,7 @@ def _review(conn, rows, cfg=None, profile=None):
                         applications.check_company(cfg, conn, row)
                         prepared = _prepare(conn, row, cfg, profile, interactive=True)
                         if prepared.problems:
-                            console.print("Approval not recorded.")
+                            console.print(_text("Approval not recorded.", "yellow"))
                             continue
                         expected = {}
                         if prepared.created:
@@ -351,7 +397,7 @@ def _review(conn, rows, cfg=None, profile=None):
                                 expected_answers_hash=exc.answers_hash,
                             )
                         approved_this_run += 1
-                        console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
+                        console.print(_text(f"Approved. Apply mode: {cfg.apply.mode}.", "green"))
                         for path in paths:
                             console.print(_text(path))
                         if cfg.apply.mode == "assisted":
@@ -367,7 +413,7 @@ def _review(conn, rows, cfg=None, profile=None):
                                     profile,
                                     [row],
                                     job=row["id"],
-                                    output=lambda message: console.print(_text(message)),
+                                    output=log,
                                 )
                             continue
                         if cfg.apply.mode != "manual":
@@ -390,7 +436,7 @@ def _review(conn, rows, cfg=None, profile=None):
                             row,
                             input("Type submitted to confirm you completed the application: "),
                         )
-                        console.print("Recorded submitted (user confirmed).")
+                        console.print(_text("Recorded submitted (user confirmed).", "green"))
                     elif action == "m":
                         value = input(
                             "State (saved/preparing/awaiting_review/blocked/manual_required/withdrawn): "
@@ -406,7 +452,7 @@ def _review(conn, rows, cfg=None, profile=None):
                         row["application_state"] = value
                         console.print(f"State: {value}")
                 except (ValueError, RuntimeError, OSError) as exc:
-                    console.print(_text(str(exc)))
+                    console.print(_text(str(exc), "red"))
                 continue
             if action == "o":
                 if not webbrowser.open(row["apply_url"]):
@@ -452,42 +498,43 @@ def _show_materials(conn, row, profile=None, cfg=None):
             for claim in provenance.get("claims", []):
                 console.print(_text("Claim: " + claim["text"]))
                 if not claim.get("fact_ids"):
-                    console.print("  WARNING: no cited facts")
+                    console.print(_text("  WARNING: no cited facts", "yellow"))
                 for fact_id in claim.get("fact_ids", []):
                     if (
                         profile is None
                         or not isinstance(fact_id, int)
                         or not 0 <= fact_id < len(profile.facts)
                     ):
-                        console.print(_text(f"  WARNING: cited fact {fact_id} no longer exists"))
+                        console.print(
+                            _text(f"  WARNING: cited fact {fact_id} no longer exists", "yellow")
+                        )
                     else:
                         fact = profile.facts[fact_id]
                         console.print(_text(f"  Fact: {fact.fact}\n  CV evidence: {fact.evidence}"))
         if item["pdf_path"]:
             console.print(_text(item["pdf_path"]))
         for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):
-            console.print(_text("WARNING: " + warning))
+            console.print(_text("WARNING: " + warning, "yellow"))
 
 
 def _prepare(conn, row, cfg, profile, *, interactive, show="created"):
     """Create missing/stale materials, show them, then ask unanswered screening questions."""
     from app.prepare import prepare_answers, prepare_materials
 
-    def say(message):
-        console.print(_text(message))
+    say = log
 
     result = prepare_materials(cfg, conn, profile, row, output=say)
     if show == "always" or result.created:
         _show_materials(conn, row, profile, cfg)
     prepare_answers(cfg, conn, profile, row, result, interactive=interactive, output=say)
     if result.created:
-        say("Prepared: " + ", ".join(result.created))
+        say(ok("Prepared: " + ", ".join(result.created)))
     if result.current:
         say("Already current, left unchanged: " + ", ".join(result.current))
     for problem in result.problems:
-        say("Not prepared: " + problem)
+        say(fail("Not prepared: " + problem))
     if result.unanswered:
-        say("Unanswered screening questions:")
+        say(warn("Unanswered screening questions:"))
         for item in result.unanswered:
             say(f"  - {item['question']}" + ("" if item["required"] else " (optional)"))
         if not interactive:
@@ -597,6 +644,60 @@ def _stats(conn, cfg):
     console.print(table)
 
 
+def _add(conn, cfg, profile, sources, args):
+    from app.analyst import analyze_new, attach_evaluations
+    from app.pipeline.add import add
+
+    result = add(
+        conn,
+        args.url,
+        sources,
+        employer=args.employer,
+        timeout=cfg.http_timeout,
+        user_agent=cfg.user_agent,
+    )
+    job_id = result["job_id"]
+    if result["status"] == "existing":
+        console.print(_text(f"Already stored as job {job_id}; nothing added."))
+    elif result["status"] == "merged":
+        console.print(
+            _text(f"Matches stored job {job_id}; the link was added as another origin of it.")
+        )
+    else:
+        where = "watchlist board" if result["on_watchlist"] else "not on the watchlist"
+        console.print(_text(f"Added job {job_id} by link ({result['adapter']}; {where})."))
+    scoring = None
+    if result["status"] != "existing":
+        try:
+            analyze_new(cfg, conn, profile, sources, job_ids={job_id})
+        except (ValueError, RuntimeError, OSError) as exc:
+            scoring = str(exc)
+    rows = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources, cfg))
+    row = next((r for r in rows if job_id in r.get("grouped_job_ids", [r["id"]])), None)
+    if row is None:
+        # Stored, but no longer open or otherwise hidden; show what is on record.
+        console.print(_text(f"Job {job_id} is stored but not open for review."))
+        return 0
+    console.print(_text(f"{row['title']} — {row['employer']} ({row['location'] or 'unknown'})"))
+    for line in _link_lines(row)[:1]:
+        console.print(_text(line))
+    if row.get("score") is not None:
+        console.print(_text("Score: " + _score_summary(row).split("\n", 2)[0]))
+        if row.get("evaluation"):
+            console.print(_text(f"Recommendation: {row['evaluation']['recommendation']}"))
+    else:
+        console.print(
+            _text(
+                "Score: unscored"
+                + (f" ({scoring})" if scoring else "")
+                + ". Next: fix that, then uv run bio-jobs analyze."
+            )
+        )
+    status = " --status all" if row["review"] != "new" else ""
+    console.print(_text(f"Review: uv run bio-jobs review --job {row['id']}{status}"))
+    return 0
+
+
 def _run(args, cfg):
     from app.private import tighten_configured
 
@@ -630,9 +731,7 @@ def _run(args, cfg):
 
         configured = cfg.with_config()
         check(configured)
-        console.print(
-            "LLM check: OK (structured answer validated). See stats for the backend used."
-        )
+        log(ok("LLM check: OK (structured answer validated). See stats for the backend used."))
         return 0
     if args.command not in ("init", "import-profile"):
         cfg = cfg.with_config()
@@ -640,7 +739,7 @@ def _run(args, cfg):
     with connect(cfg.resolved(cfg.database_path)) as conn:
         migrate(conn)
         if args.command == "init":
-            console.print("Database ready")
+            log(ok("Database ready"))
             return 0
         if args.command == "unmerge":
             from app.pipeline.dedupe import unmerge
@@ -712,7 +811,10 @@ def _run(args, cfg):
             return 0
         if not profile.reviewed:
             console.print(
-                "Profile is unreviewed; edit your candidate YAML before relying on these preferences."
+                _text(
+                    "Profile is unreviewed; edit your candidate YAML before relying on these preferences.",
+                    "yellow",
+                )
             )
         if args.command in ("diff", "state"):
             row = conn.execute("SELECT id FROM jobs WHERE id=?", (args.job,)).fetchone()
@@ -725,6 +827,8 @@ def _run(args, cfg):
                 console.print(f"Application {args.job}: {args.value}")
             return 0
         sources = load_sources(cfg.resolved(cfg.sources_path))
+        if args.command == "add":
+            return _add(conn, cfg, profile, sources, args)
         if args.command == "watch":
             from app.watch import run
 
@@ -734,17 +838,23 @@ def _run(args, cfg):
                 profile,
                 sources,
                 scheduled=args.scheduled,
-                output=lambda message: console.print(_text(message)),
+                output=log,
             )
             return int(bool(result.get("errors")))
-        if args.command == "autopilot" and cfg.apply.mode != "auto":
-            raise ValueError("autopilot requires apply.mode: auto; review and approve jobs first")
+        if getattr(args, "mode", None):
+            cfg = cfg.model_copy(update={"apply": cfg.apply.model_copy(update={"mode": args.mode})})
+        if args.command == "autopilot" and cfg.apply.mode not in ("auto", "dry_run"):
+            raise ValueError(
+                "autopilot requires apply.mode: auto (or --mode dry_run); "
+                "review and approve jobs first"
+            )
         poll = args.command == "autopilot" and not args.no_scan
         if args.command in ("scan", "analyze") or poll:
             from app.resume import require_reviewed
 
             require_reviewed(cfg, profile)
         if args.command in ("sync", "scan") or poll:
+            header("Sync")
             results = discover(
                 conn, profile, sources, timeout=cfg.http_timeout, user_agent=cfg.user_agent
             )
@@ -752,7 +862,9 @@ def _run(args, cfg):
             for row in results:
                 table.add_row(
                     *(
-                        _text(row.get(key))
+                        _text(row.get(key), STATUS_STYLE.get(row.get("status"), ""))
+                        if key == "status"
+                        else _text(row.get(key), "red" if key == "error" else "")
                         for key in ("source", "status", "fetched", "accepted", "error")
                     )
                 )
@@ -762,8 +874,9 @@ def _run(args, cfg):
         if args.command in ("scan", "analyze") or poll:
             from app.analyst import analyze_new
 
+            header("Score")
             done = analyze_new(cfg, conn, profile, sources)
-            console.print(f"Scored {done} jobs; unchanged evaluations reused.")
+            log(ok(f"Scored {done} jobs; unchanged evaluations reused."))
             if not poll:
                 return int(
                     args.command == "scan"
@@ -776,6 +889,7 @@ def _run(args, cfg):
         if args.command in ("apply", "autopilot"):
             from app.autopilot import run
 
+            header("Apply")
             run(
                 cfg,
                 conn,
@@ -783,7 +897,7 @@ def _run(args, cfg):
                 ranked,
                 job=getattr(args, "job", None),
                 unattended=args.command == "autopilot",
-                output=lambda message: console.print(_text(message)),
+                output=log,
             )
             return 0
         if args.command == "import":
@@ -848,6 +962,7 @@ def _run(args, cfg):
             ):
                 raise ValueError(applications.score_gate_message(cfg, selected[0]))
             if args.command == "prepare":
+                header(f"Prepare job {selected[0]['id']}")
                 result = _prepare(
                     conn,
                     selected[0],
@@ -863,13 +978,14 @@ def _run(args, cfg):
                     "awaiting_review (press a)."
                 )
             elif args.command == "letters":
+                header("Letters")
                 done = materials.write_letters(cfg, conn, profile, selected, force=args.force)
-                console.print(
-                    f"Prepared {done} letters. Review shows warnings and fact provenance."
-                )
+                log(ok(f"Prepared {done} letters. Review shows warnings and fact provenance."))
                 if args.job and not done:
-                    console.print(
-                        "No new letter prepared; the current version may already be up to date. Use --force to rebuild."
+                    log(
+                        warn(
+                            "No new letter prepared; the current version may already be up to date. Use --force to rebuild."
+                        )
                     )
                     return 1
             elif args.command == "answers":
@@ -893,7 +1009,7 @@ def _run(args, cfg):
                     profile,
                     selected,
                     interactive=not args.show,
-                    output=lambda text: console.print(_text(text)),
+                    output=lambda line: console.print(_text(line)),
                 )
                 console.print(
                     f"Screening drafts saved; answer bank: {cfg.resolved(cfg.apply.answers_file)}"
@@ -905,6 +1021,7 @@ def _run(args, cfg):
         rows = _select(
             ranked, args, review=args.command == "review", min_score=cfg.analyst.min_score
         )
+        keywords.attach_keyword_matches(conn, cfg, rows)
         if args.command == "list":
             _list(rows)
         elif args.command == "review":
@@ -934,6 +1051,11 @@ def main(argv=None) -> int:
     extraction = sub.add_parser("extract-profile", help="Extract resume facts for mandatory review")
     extraction.add_argument("--output", type=Path)
     extraction.add_argument("--force", action="store_true", help="Replace the output YAML")
+    add = sub.add_parser(
+        "add", help="Add one job by link (Greenhouse, Lever, Ashby, Workable or any job page)"
+    )
+    add.add_argument("url", help="https:// link to the job posting")
+    add.add_argument("--employer", help="Employer name, when the page does not say")
     sub.add_parser("sync", help="Fetch public sources, respecting persistent cooldowns")
     sub.add_parser("scan", help="Sync public sources and score eligible jobs")
     watch = sub.add_parser("watch", help="One locked sync, score and new/changed job alert pass")
@@ -945,10 +1067,13 @@ def main(argv=None) -> int:
     sub.add_parser("analyze", help="Score stored jobs with missing or stale evaluations")
     apply = sub.add_parser("apply", help="Apply one approved job or the approved queue")
     apply.add_argument("job", nargs="?", type=_positive)
+    dry_help = "Fill and verify forms and save a screenshot, but never press Submit"
+    apply.add_argument("--mode", choices=["dry_run"], help=dry_help)
     autopilot = sub.add_parser(
         "autopilot", aliases=["run"], help="One auto pass: sync, score, then apply approved jobs"
     )
     autopilot.add_argument("--no-scan", action="store_true", help="Use stored approved queue only")
+    autopilot.add_argument("--mode", choices=["dry_run"], help=dry_help)
     prepare = sub.add_parser(
         "prepare",
         help="Create any missing or stale letter and answers, check the resume PDF; ask what is unknown",
@@ -1018,7 +1143,7 @@ def main(argv=None) -> int:
         return 0
     if args.command == "run":
         args.command = "autopilot"
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[Handler()])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         cfg = Settings()
@@ -1034,15 +1159,16 @@ def main(argv=None) -> int:
             if args.command in ("sync", "scan", "watch", "autopilot", "apply"):
                 from app.runlog import run
 
-                with run(args.command) as summary:
+                with run(args.command) as record:
                     result = _run(args, cfg)
                     if result:
-                        summary["exit_code"] = result
+                        record["exit_code"] = result
+                    summary(f"{args.command} done", run_summary(record))
                     return result
             return _run(args, cfg)
 
     except KeyboardInterrupt:
-        console.print("Stopped.")
+        console.print(_text("Stopped.", "yellow"))
         return stop.exit_code()
     except (
         ValueError,
@@ -1053,7 +1179,7 @@ def main(argv=None) -> int:
         httpx.HTTPError,
         yaml.YAMLError,
     ) as exc:
-        console.print(f"Error: {exc}")
+        console.print(_text(f"Error: {exc}", "bold red"))
         return 1
 
 

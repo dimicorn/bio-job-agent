@@ -330,6 +330,7 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
         batches,
         cfg.analyst.parallel,
         lambda executor, batch: executor.submit(write_batch, cfg, profile, batch, instruction),
+        name="letters",
     ):
         try:
             results = future.result()
@@ -433,14 +434,20 @@ line-height:1.35; font-variant-ligatures:none; font-feature-settings:"liga" 0,"c
 h1 {font-size:18pt} h2 {font-size:12pt; border-bottom:1px solid #aaa} a {color:#111}"""
 
 
-def browser_available():
+def chromium_path():
+    """Playwright's Chromium executable, or None when it is not installed."""
     try:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            return Path(p.chromium.executable_path).exists()
+            path = p.chromium.executable_path
     except (ImportError, OSError):
-        return False
+        return None
+    return path if Path(path).exists() else None
+
+
+def browser_available():
+    return chromium_path() is not None
 
 
 def render_pdf(md_text, out):

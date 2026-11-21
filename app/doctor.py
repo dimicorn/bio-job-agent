@@ -8,15 +8,14 @@ import sys
 
 import httpx
 import yaml
-from rich.console import Console
 from rich.table import Table
 
 from app.candidate.profile import load_profile, require_name
+from app.console import console
 from app.llm import check, fallback_cfg
 from app.settings import Settings
 from app.sources.config import load_sources
 
-console = Console(markup=False)
 CLI_EXECUTABLES = {"codex": "codex", "claude_code": "claude", "opencode": "opencode", "pi": "pi"}
 
 
@@ -166,6 +165,19 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
             f"daily_limit={a.daily_limit}, max_per_run={a.max_per_run}, min_score={a.min_score}, "
             f"active_hours={a.active_hours} (local time)",
         )
+        from app.autopilot import browser_choice
+        from app.materials import chromium_path
+
+        executable, name = browser_choice(configured, chromium_path)
+        browser_mode = a.mode in ("assisted", "auto", "dry_run")
+        report(
+            "Apply browser",
+            bool(executable),
+            f"{name} ({executable}); profile {configured.resolved(a.profile_dir)}",
+            "No browser for assisted/auto/dry_run: install Google Chrome or run "
+            "uv run playwright install chromium",
+            warn=not browser_mode,
+        )
     path = cfg.resolved(cfg.database_path)
     if path.exists():
         try:
@@ -184,7 +196,7 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
                     warn=True,
                 )
                 conn.row_factory = sqlite3.Row
-                for row in conn.execute("SELECT * FROM sources ORDER BY id"):
+                for row in conn.execute("SELECT * FROM sources WHERE adapter!='link' ORDER BY id"):
                     report(
                         f"Source {row[0]}",
                         row["health"] in ("ok", "partial"),
