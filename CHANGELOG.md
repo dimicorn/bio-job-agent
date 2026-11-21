@@ -40,6 +40,7 @@
 
 ### ⚙️ Miscellaneous Tasks
 
+- Pass the token to git-cliff for GitHub metadata in release notes
 - Publish GitHub Releases with git-cliff notes on version tags
 - Derive the package version from git tags with hatch-vcs
 
