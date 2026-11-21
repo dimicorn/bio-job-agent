@@ -1,5 +1,5 @@
 # London / Golden Triangle commercial life-sciences watchlist.
-# Verified 2026-11-15 using public GETs, BioJobAgent robots rules and pacing.
+# Verified 2026-11-15 (additions 2026-11-21) using public GETs, BioJobAgent robots rules and pacing.
 # Recheck every board and employer identity: bio-jobs firms --validate
 # token: public ATS slug, or an exact verified HTTPS careers URL for site.
 # tier: 1 = priority, 2 = broader scientific coverage, 3 = supporting suppliers.
@@ -16,6 +16,12 @@
 # Autolus (London/Stevenage): https://www.autolus.com/careers/ links to
 # autolus.wd103.myworkdayjobs.com, but direct public GET returned HTTP 403;
 # excluded rather than bypassing access restrictions or inventing a Workday API.
+# Constructive Bio, Ochre Bio (BambooHR), Bicycle Therapeutics (SmartRecruiters),
+# Sano Genetics (Teamtailor), Oxford Nanopore (Oracle Cloud): ATS outside the API
+# adapters; verified own career pages use site watchers below.
+# Evox Therapeutics (Oxford): https://www.evoxtherapeutics.com/ and its careers page
+# returned HTTP 403 to a direct public GET on 2026-11-21; excluded rather than
+# bypassing access restrictions.
 
 
 firms:
@@ -222,3 +228,135 @@ firms:
     area: London
     review_url: https://jobs.ashbyhq.com/lindus
     verified_on: '2026-11-18'
+
+  - name: Basecamp Research
+    ats: ashby
+    token: basecamp-research
+    tier: 1
+    industry: biotech
+    employer_url: https://www.basecamp-research.com/
+    evidence_url: https://www.basecamp-research.com/
+    industry_evidence: Biological AI models and genomic data for therapeutic design, with an in-house therapeutic pipeline.
+    area: London
+    review_url: https://jobs.ashbyhq.com/basecamp-research
+    verified_on: '2026-11-21'
+
+  - name: Adaptyv
+    ats: ashby
+    token: adaptyv
+    tier: 1
+    industry: biotech
+    employer_url: https://www.adaptyvbio.com/
+    evidence_url: https://www.adaptyvbio.com/
+    industry_evidence: Adaptyv Bio automated protein engineering lab generating experimental data for AI protein design.
+    area: London
+    review_url: https://jobs.ashbyhq.com/adaptyv
+    verified_on: '2026-11-21'
+
+  - name: Boltz
+    ats: ashby
+    token: boltz
+    tier: 2
+    industry: biotech
+    employer_url: https://boltz.com/
+    evidence_url: https://boltz.com/
+    industry_evidence: AI molecular design used by pharmaceutical and biotech scientists to design drug molecules.
+    area: London
+    review_url: https://jobs.ashbyhq.com/boltz
+    verified_on: '2026-11-21'
+
+  - name: Level Zero Health
+    ats: lever
+    token: level-zero-health
+    tier: 2
+    industry: commercial_life_sciences
+    employer_url: https://www.levelzerohealth.com/
+    evidence_url: https://www.levelzerohealth.com/
+    industry_evidence: DNA-based biosensors for real-time hormone monitoring in fertility and personalised medicine.
+    area: London
+    review_url: https://jobs.lever.co/level-zero-health
+    verified_on: '2026-11-21'
+
+  - name: Nuclera
+    ats: workable
+    token: nuclera
+    tier: 1
+    industry: commercial_life_sciences
+    employer_url: https://www.nuclera.com/
+    evidence_url: https://www.nuclera.com/
+    industry_evidence: Benchtop rapid protein prototyping instruments for protein expression and drug discovery.
+    area: Cambridge
+    review_url: https://apply.workable.com/nuclera/
+    verified_on: '2026-11-21'
+
+  - name: Constructive Bio
+    ats: site
+    token: https://constructive.bio/careers/
+    tier: 1
+    industry: biotech
+    employer_url: https://constructive.bio/
+    evidence_url: https://constructive.bio/
+    industry_evidence: Synthetic biology, protein engineering and biomanufacturing of new-to-nature chemistries for therapies.
+    area: Cambridge
+    review_url: https://constructive.bio/careers/
+    verified_on: '2026-11-21'
+
+  - name: Bicycle Therapeutics
+    ats: site
+    token: https://www.bicycletherapeutics.com/careers-culture/careers/
+    tier: 1
+    industry: biotech
+    employer_url: https://www.bicycletherapeutics.com/
+    evidence_url: https://www.bicycletherapeutics.com/
+    industry_evidence: Precision-guided bicyclic peptide therapeutics for solid tumours, at Granta Park.
+    area: Cambridge
+    review_url: https://www.bicycletherapeutics.com/careers-culture/careers/
+    verified_on: '2026-11-21'
+
+  - name: Sano Genetics
+    ats: site
+    token: https://careers.sanogenetics.com/jobs
+    tier: 2
+    industry: commercial_life_sciences
+    employer_url: https://sanogenetics.com/
+    evidence_url: https://sanogenetics.com/
+    industry_evidence: Precision medicine platform for clinical trial recruitment and genetic research operations.
+    area: Cambridge
+    review_url: https://careers.sanogenetics.com/jobs
+    verified_on: '2026-11-21'
+
+  - name: Oxford Nanopore Technologies
+    ats: site
+    token: https://nanoporetech.com/about/careers
+    tier: 1
+    industry: commercial_life_sciences
+    employer_url: https://nanoporetech.com/
+    evidence_url: https://nanoporetech.com/about/careers
+    industry_evidence: Nanopore-based molecular sensing technology for real-time DNA and RNA sequencing.
+    area: Oxford
+    review_url: https://nanoporetech.com/about/careers
+    verified_on: '2026-11-21'
+
+  - name: Ochre Bio
+    ats: site
+    token: https://www.ochre-bio.com/careers/
+    tier: 1
+    industry: biotech
+    employer_url: https://www.ochre-bio.com/
+    evidence_url: https://www.ochre-bio.com/
+    industry_evidence: Oxford biotechnology company developing therapies for liver health challenges.
+    area: Oxford
+    review_url: https://www.ochre-bio.com/careers/
+    verified_on: '2026-11-21'
+
+  - name: Ellipses Pharma
+    ats: site
+    token: https://ellipses.life/career/
+    tier: 2
+    industry: pharma
+    employer_url: https://ellipses.life/
+    evidence_url: https://ellipses.life/
+    industry_evidence: Oncology-focused drug development company advancing cancer treatments for unmet clinical needs.
+    area: London
+    review_url: https://ellipses.life/career/
+    verified_on: '2026-11-21'
