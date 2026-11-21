@@ -329,7 +329,17 @@ def card(row, *, target=None) -> None:
             ),
             target=target,
         )
-    target.print(text(f"Apply: {row['apply_url']}", "dim"), soft_wrap=True)
+    target.print(text(apply_line(row), "dim"), soft_wrap=True)
+
+
+def apply_line(row) -> str:
+    """The apply link, saying when it is the employer's own site rather than a job board."""
+    if row.get("board_sources") and row.get("apply_source") not in (
+        None,
+        *row["board_sources"],
+    ):
+        return f"Apply (employer site, {row['apply_source']}): {row['apply_url']}"
+    return f"Apply: {row['apply_url']}"
 
 
 def keyword_section(row, *, target=None) -> None:
@@ -418,7 +428,7 @@ def detail(row, *, full=False, target=None) -> None:
         _section(title, items, empty="none", target=target)
     keyword_section(row, target=target)
     target.print(Text("Links", style="bold"))
-    target.print(text(f"    Apply: {row['apply_url']}"), soft_wrap=True)
+    target.print(text("    " + apply_line(row)), soft_wrap=True)
     for origin in row.get("origins", []):
         target.print(
             text(f"    Origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}"),

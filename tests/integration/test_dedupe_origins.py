@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from app.models.posting import Posting
 from app.pipeline.dedupe import store_job, unmerge
@@ -170,3 +171,72 @@ def test_existing_application_jobs_remain_visible(conn, profile, sources):
     assert len(rows) == 1 and rows[0]["id"] == job_a
     conn.execute("INSERT INTO applications(job_id,state) VALUES (?, 'preparing')", (job_b,))
     assert {row["id"] for row in list_jobs(conn, profile, [a, b])} == {job_a, job_b}
+
+
+def grouped_row(job_id, origins, *, apply_url, board_sources=()):
+    job = posting(SimpleNamespace(employer="Genomics"), source_url=apply_url, apply_url=apply_url)
+    return {
+        "id": job_id,
+        "employer_id": 1,
+        **job.model_dump(),
+        "origins": origins,
+        "locations": [job.location],
+        "board_sources": list(board_sources),
+    }
+
+
+def origin(origin_id, source_id, adapter, url, present=1):
+    return {
+        "id": origin_id,
+        "source_id": source_id,
+        "adapter": adapter,
+        "apply_url": url,
+        "present": present,
+    }
+
+
+BOARD = "https://biotechnologyjobs.co.uk/jobs/scientist-functional-genomics-genomics-london"
+ASHBY = "https://jobs.ashbyhq.com/genomics/1234"
+
+
+def test_grouped_job_applies_on_employer_site_not_job_board(conn):
+    from app.jobview import apply_line
+    from app.pipeline.dedupe import group_stored_jobs
+
+    board = grouped_row(
+        16,
+        [origin(1, "biotechnologyjobs-jsonfeed", "jsonfeed", BOARD)],
+        apply_url=BOARD,
+        board_sources=["biotechnologyjobs-jsonfeed"],
+    )
+    ats = grouped_row(17, [origin(2, "genomics-ashby", "ashby", ASHBY)], apply_url=ASHBY)
+    [row] = group_stored_jobs(conn, [board, ats])
+    assert row["id"] == 16 and row["grouped_job_ids"] == [16, 17]
+    assert row["apply_url"] == ASHBY and row["apply_source"] == "genomics-ashby"
+    assert row["board_sources"] == ["biotechnologyjobs-jsonfeed"]
+    assert apply_line(row) == f"Apply (employer site, genomics-ashby): {ASHBY}"
+
+
+def test_job_board_url_used_only_when_sole_or_employer_posting_gone(conn):
+    from app.jobview import apply_line
+    from app.pipeline.dedupe import group_stored_jobs
+
+    alone = grouped_row(
+        16,
+        [origin(1, "biotechnologyjobs-jsonfeed", "jsonfeed", BOARD)],
+        apply_url=BOARD,
+        board_sources=["biotechnologyjobs-jsonfeed"],
+    )
+    [row] = group_stored_jobs(conn, [alone])
+    assert row["apply_url"] == BOARD and apply_line(row) == f"Apply: {BOARD}"
+    expired = grouped_row(
+        16,
+        [
+            origin(1, "biotechnologyjobs-jsonfeed", "jsonfeed", BOARD),
+            origin(2, "genomics-ashby", "ashby", ASHBY, present=0),
+        ],
+        apply_url=BOARD,
+        board_sources=["biotechnologyjobs-jsonfeed"],
+    )
+    [row] = group_stored_jobs(conn, [expired])
+    assert row["apply_url"] == BOARD
