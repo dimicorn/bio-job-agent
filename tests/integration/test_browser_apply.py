@@ -37,7 +37,7 @@ def page(browser):
 
 
 @pytest.fixture
-def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
+def prepared(tmp_path, conn, profile, sources, transport, monkeypatch, make_pdf):
     from app.applier import GreenhouseApplier, ProposedAnswers
 
     def fake_form_url(self, url):
@@ -49,6 +49,7 @@ def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
     cfg = Settings(
         _env_file=None,
         resume_path=tmp_path / "resume.md",
+        resume_pdf_path=tmp_path / "resume.pdf",
         materials_path=tmp_path / "materials",
         apply=Apply(
             mode="auto",
@@ -62,6 +63,14 @@ def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
         ),
     )
     cfg.resume_path.write_text("# Alex Example\nalex@example.org\n## Experience\nCell assays.\n")
+    make_pdf(
+        cfg.resume_pdf_path,
+        [
+            ("Alex Example", 18, 40, 50),
+            ("alex@example.org", 10, 40, 70),
+            ("Cell assays.", 10, 40, 90),
+        ],
+    )
     profile.name, profile.reviewed = "Alex Example", True
     profile.resume_hash = resume.digest(resume.resume_text(cfg))
     discover(conn, profile, sources, transport=transport, pause=lambda _: None)
@@ -77,13 +86,6 @@ def approve(prepared, conn, ats="greenhouse", index=0):
     row = rows[index]
     row["apply_url"] = URLS[ats]
     materials.save_version(cfg, conn, profile, row, "letter", "Approved letter about cell assays.")
-    item = materials.save_version(cfg, conn, profile, row, "resume", cfg.resume_path.read_text())
-    pdf = cfg.materials_path / f"resume-{row['id']}.pdf"
-    pdf.write_bytes(b"%PDF-mock approved CV")
-    conn.execute(
-        "UPDATE material_versions SET pdf_path=?,pdf_hash=?,ats_warnings=? WHERE id=?",
-        (str(pdf), resume.digest(pdf.read_bytes().hex()), "[]", item["id"]),
-    )
     answers.snapshot(cfg, conn, profile, row)
     applications.approve(cfg, conn, profile, row)
     return cfg, profile, row
@@ -263,7 +265,7 @@ def test_gate_rechecked_at_execution_and_run_limit(prepared, conn, page):
     assert not conn.execute("SELECT * FROM application_attempts").fetchall()
 
 
-@pytest.mark.parametrize("change", ["bank", "new_letter", "pdf"])
+@pytest.mark.parametrize("change", ["bank", "new_letter", "unreadable_pdf"])
 def test_approved_versions_and_answers_are_pinned(prepared, conn, change):
     cfg, profile, row = approve(prepared, conn)
     if change == "bank":
@@ -271,11 +273,48 @@ def test_approved_versions_and_answers_are_pinned(prepared, conn, change):
     elif change == "new_letter":
         materials.save_version(cfg, conn, profile, row, "letter", "New unapproved text")
     else:
-        item = materials.latest(conn, row["id"], "resume")
-        Path(item["pdf_path"]).write_bytes(b"tampered")
+        cfg.resume_pdf_path.write_bytes(b"not a pdf")
     with pytest.raises(ValueError):
         autopilot.reserve(cfg, conn, profile, row, "auto")
     assert not conn.execute("SELECT * FROM application_attempts").fetchall()
+
+
+def test_revised_resume_pdf_is_attached_without_reapproval(prepared, conn, page, make_pdf):
+    import hashlib
+    import json
+
+    cfg, profile, row = approve(prepared, conn)
+    make_pdf(
+        cfg.resume_pdf_path,
+        [("Alex Example", 18, 40, 50), ("alex@example.org", 10, 40, 70), ("Revised.", 10, 40, 90)],
+    )
+    revised = hashlib.sha256(cfg.resume_pdf_path.read_bytes()).hexdigest()
+    mock_form(page, "greenhouse")
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    hashes = [
+        json.loads(e["detail"]).get("file_hash")
+        for e in events(conn, row)
+        if e["action"] == "verify" and "file_hash" in e["detail"]
+    ]
+    assert revised in hashes
+
+
+def test_failing_resume_pdf_check_stops_fill(prepared, conn, page, make_pdf, monkeypatch):
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(page, "greenhouse")
+    original = applications.validate_materials
+
+    def valid_then_replaced(*args, **kwargs):
+        # The PDF is replaced by one without the candidate's name after the reservation.
+        result = original(*args, **kwargs)
+        make_pdf(cfg.resume_pdf_path, [("Someone Else", 18, 40, 50)])
+        return result
+
+    monkeypatch.setattr(applications, "validate_materials", valid_then_replaced)
+    status = autopilot.apply_one(cfg, conn, profile, row, page)
+    assert status == "manual_required"
+    assert page.evaluate("window.__submissions") == 0
+    assert "Resume PDF" in events(conn, row)[-1]["detail"]
 
 
 def test_final_verify_catches_async_overwrite(prepared, conn, page, monkeypatch):

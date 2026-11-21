@@ -373,6 +373,14 @@ class FormApplier:
                 if field["required"]:
                     stops.append(f"Stored answer does not match options: {label}")
                 continue
+            if key and key not in ("resume", "letter"):
+                # Contact details come only from the profile, resume or answer bank, never the LLM.
+                queue(label, field["options"], field["required"])
+                unresolved.add(field["token"])
+                reasons_by_token[field["token"]] = "no profile, resume or stored value"
+                if field["required"]:
+                    stops.append(f"Missing contact detail: {label}")
+                continue
             if (
                 self.cfg.apply.auto_consent
                 and len(field["options"]) == 1
@@ -789,6 +797,7 @@ def standard_key(field):
         "resume": ("resume", "cv", "resume/cv", "attach resume", "upload resume"),
         "letter": ("cover letter", "coverletter"),
         "city": ("location", "city", "current location"),
+        "country": ("country", "country of residence"),
         "linkedin": ("linkedin", "linkedin url", "linkedin profile"),
         "github": ("github", "github url", "github profile"),
         "website": ("website", "website url", "personal website", "portfolio"),
@@ -799,19 +808,25 @@ def standard_key(field):
     return None
 
 
+def greenhouse_ids(url):
+    """Board token and job id from a hosted, embedded or company-page Greenhouse URL."""
+    parts = urlsplit(url)
+    path = [p for p in parts.path.split("/") if p]
+    query = parse_qs(parts.query)
+    if "embed/job_app" in parts.path:
+        board, job = query.get("for", [""])[0], query.get("token", [""])[0]
+    elif len(path) >= 3 and path[-2] == "jobs":
+        board, job = path[0], path[-1]
+    else:
+        raise FormStop("Cannot identify Greenhouse board and job")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", board) or not job.isdigit():
+        raise FormStop("Invalid Greenhouse board or job identifier")
+    return board, job
+
+
 class GreenhouseApplier(FormApplier):
     def form_url(self, url):
-        parts = urlsplit(url)
-        path = [p for p in parts.path.split("/") if p]
-        query = parse_qs(parts.query)
-        if "embed/job_app" in parts.path:
-            board, job = query.get("for", [""])[0], query.get("token", [""])[0]
-        elif len(path) >= 3 and path[-2] == "jobs":
-            board, job = path[0], path[-1]
-        else:
-            raise FormStop("Cannot identify Greenhouse board and job")
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", board) or not job.isdigit():
-            raise FormStop("Invalid Greenhouse board or job identifier")
+        board, job = greenhouse_ids(url)
         with httpx.Client(timeout=self.cfg.http_timeout) as client:
             api = PublicClient(client, self.cfg.user_agent)
             payload = api.get_json(

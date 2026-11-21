@@ -2,7 +2,6 @@
 
 import fcntl
 import json
-import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -13,10 +12,10 @@ from urllib.request import urlopen
 
 from playwright.sync_api import Error as PlaywrightError
 
-from app import answers, applications, materials
+from app import answers, applications, materials, resume_pdf
 from app.applier import FormStop, PartialPlanStop, applier_for
 from app.private import private_dir, private_file, private_open
-from app.resume import digest
+from app.resume import digest, resume_text
 
 
 def event(conn, job_id, attempt_id, action, **detail):
@@ -114,8 +113,9 @@ def finish(conn, row, attempt, status, reason):
     return status
 
 
-def values_for(conn, profile, ids):
+def values_for(cfg, conn, profile, ids):
     from app.candidate.profile import require_name
+    from app.contact import contact_values
 
     require_name(profile)
     versions = {
@@ -124,24 +124,10 @@ def values_for(conn, profile, ids):
         )
         for kind, version in ids.items()
     }
-    cv = versions["resume"]["content"]
-    # Contact values must already exist in the approved resume or explicit answer bank.
-    emails = set(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", cv))
-    phones = re.findall(
-        r"(?m)^\s*(?:Phone|Tel|Mobile)\s*:\s*([+\d][\d ()+.-]{6,})\s*$", cv, re.IGNORECASE
-    )
-    names = profile.name.split()
+    # Contact values must already exist in the profile, reviewed resume or explicit answer bank.
     return {
-        "first_name": profile.first_name or (names[0] if names else ""),
-        "last_name": profile.last_name or " ".join(names[1:]),
-        "full_name": profile.name,
-        "email": profile.email or (next(iter(emails)) if len(emails) == 1 else ""),
-        "phone": profile.phone or (phones[0].strip() if len(phones) == 1 else ""),
-        "city": profile.city,
-        "linkedin": profile.linkedin,
-        "github": profile.github,
-        "website": profile.website,
-        "resume": versions["resume"]["pdf_path"],
+        **contact_values(profile, resume_text(cfg)),
+        "resume": str(resume_pdf.pdf_path(cfg)),
         "letter": versions["letter"]["content"],
     }, versions
 
@@ -178,7 +164,11 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                 "Acknowledgement already present before this attempt; reconcile manually"
             )
         fields = applier.fields()
-        values, versions = values_for(conn, profile, ids)
+        values, versions = values_for(cfg, conn, profile, ids)
+        # The current resume PDF is attached as it is, after the same light check as prepare.
+        pdf = resume_pdf.check(cfg, profile, resume_text(cfg))
+        if not pdf.ok:
+            raise FormStop("Resume PDF: " + "; ".join(pdf.problems))
         # A cover letter upload uses a PDF derived only from the pinned approved text.
         from app.applier import standard_key
 
@@ -204,7 +194,7 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                     row["employer"],
                     queue,
                     {
-                        "resume": versions["resume"]["content"],
+                        "resume": resume_text(cfg),
                         "facts": [f.model_dump() for f in profile.facts],
                     },
                 )
@@ -248,9 +238,6 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                 raise FormStop(
                     f"{kind} file changed while filling; run bio-jobs import {row['id']} --kind {kind} and review again"
                 )
-        cv = versions["resume"]
-        if digest(Path(cv["pdf_path"]).read_bytes().hex()) != cv["pdf_hash"]:
-            raise FormStop("Approved resume PDF changed while filling")
         if digest(answers.load_answers(cfg)) != digest(bank):
             raise FormStop("Approved answers changed while filling")
         current = conn.execute(

@@ -155,15 +155,26 @@ def ask_missing(cfg, conn, row, *, interactive=False, output=print):
     for item in plan(cfg, conn, row):
         if item["answer"]:
             continue
+        from app.applier import SENSITIVE
+
         output(
             f"{row['id']} {row['employer']}: {item['question']}"
             + ("" if item["required"] else " (optional)")
+            + (
+                " [declaration or sensitive: only you answer this]"
+                if SENSITIVE.search(" ".join([item["question"], *item["options"]]))
+                else ""
+            )
         )
         if not interactive:
             continue
         for i, option in enumerate(item["options"], 1):
             output(f"  {i}. {option}")
-        raw = input("Answer (option numbers separated by commas; Enter skips): ").strip()
+        raw = input(
+            "Answer (option numbers separated by commas; Enter skips): "
+            if item["options"]
+            else "Answer (Enter skips): "
+        ).strip()
         if not raw:
             continue
         if item["options"]:

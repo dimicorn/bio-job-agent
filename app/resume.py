@@ -157,6 +157,21 @@ def require_reviewed(cfg, profile):
         )
 
 
+def resume_status_text(path) -> str:
+    """missing | empty | example | filled, from the file alone."""
+    from app.settings import ROOT
+
+    if not path.exists():
+        return "missing"
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return "empty"
+    example = ROOT / "resume.example.md"
+    if example.exists() and text == example.read_text(encoding="utf-8").strip():
+        return "example"
+    return "filled"
+
+
 def resume_status(cfg, profile: CandidateProfile) -> tuple[str, str]:
     """Return (state, detail): missing | example | empty | unextracted | changed | current."""
     from app.settings import ROOT

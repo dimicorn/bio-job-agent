@@ -258,7 +258,7 @@ def _review(conn, rows, cfg=None, profile=None):
                 _text(f"Origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}")
             )
         console.print(_text("Locations: " + ("; ".join(row.get("locations") or []) or "unknown")))
-        _show_materials(conn, row, profile)
+        _show_materials(conn, row, profile, cfg)
         console.print(
             "o open | s save | r reject | l later | v override | e edit letter | "
             "w rewrite | d diff | "
@@ -303,7 +303,7 @@ def _review(conn, rows, cfg=None, profile=None):
                         if prepared.created:
                             ids = {
                                 kind: materials.latest(conn, row["id"], kind)["id"]
-                                for kind in ("letter", "resume", "answers")
+                                for kind in ("letter", "answers")
                             }
                             bank = digest(answers.load_answers(cfg))
                             try:
@@ -430,10 +430,14 @@ def _review(conn, rows, cfg=None, profile=None):
                 break
 
 
-def _show_materials(conn, row, profile=None):
+def _show_materials(conn, row, profile=None, cfg=None):
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
     console.print(f"Application: {current[0] if current else 'unprepared'}")
-    for kind in ("letter", "resume", "answers"):
+    if cfg is not None:
+        from app.resume_pdf import pdf_path
+
+        console.print(_text(f"resume PDF (attached unchanged): {pdf_path(cfg)}"))
+    for kind in ("letter", "answers"):
         item = materials.latest(conn, row["id"], kind)
         if not item:
             continue
@@ -474,7 +478,7 @@ def _prepare(conn, row, cfg, profile, *, interactive, show="created"):
 
     result = prepare_materials(cfg, conn, profile, row, output=say)
     if show == "always" or result.created:
-        _show_materials(conn, row, profile)
+        _show_materials(conn, row, profile, cfg)
     prepare_answers(cfg, conn, profile, row, result, interactive=interactive, output=say)
     if result.created:
         say("Prepared: " + ", ".join(result.created))
@@ -682,6 +686,30 @@ def _run(args, cfg):
             if target != cfg.resolved(cfg.candidate_path):
                 console.print(f"To use it, set BIO_CANDIDATE_PATH={target} in .env.")
             return 0
+        if args.command == "resume-from-pdf":
+            from app.resume_pdf import write_resume_md
+
+            target, _markdown = write_resume_md(cfg, force=args.force, source=args.pdf)
+            console.print(f"Wrote {target} from the resume PDF text.")
+            console.print(
+                f"Next: check {target} against your PDF and correct any layout or wording, "
+                "then run uv run bio-jobs extract-profile --force and review the profile."
+            )
+            return 0
+        if args.command == "resume":
+            from app.resume_pdf import check
+
+            md = cfg.resolved(cfg.resume_path)
+            result = check(cfg, profile, md.read_text(encoding="utf-8") if md.exists() else "")
+            console.print(_text(f"Resume PDF: {result.path}"))
+            for problem in result.problems:
+                console.print(_text("BLOCKER: " + problem))
+            if result.problems:
+                return 1
+            console.print(
+                "OK: applications attach this file as it is; its text has your name and email."
+            )
+            return 0
         if not profile.reviewed:
             console.print(
                 "Profile is unreviewed; edit your candidate YAML before relying on these preferences."
@@ -691,19 +719,7 @@ def _run(args, cfg):
             if not row:
                 raise ValueError("Unknown job ID")
             if args.command == "diff":
-                if args.source:
-                    item = materials.latest(conn, args.job, "resume")
-                    if not item:
-                        raise ValueError("No resume exists; run resume for this job first")
-                    console.print(
-                        _text(
-                            materials.resume_source_diff(
-                                cfg, Path(item["path"]).read_text(encoding="utf-8")
-                            )
-                        )
-                    )
-                else:
-                    console.print(_text(materials.material_diff(conn, args.job, args.kind)))
+                console.print(_text(materials.material_diff(conn, args.job, args.kind)))
             else:
                 materials.state(conn, args.job, args.value)
                 console.print(f"Application {args.job}: {args.value}")
@@ -820,7 +836,7 @@ def _run(args, cfg):
             )
             console.print(_text(item["path"]))
             return 0
-        if args.command in ("letters", "resume", "pdf", "letter-pdf", "answers", "prepare"):
+        if args.command in ("letters", "letter-pdf", "answers", "prepare"):
             from app.resume import require_reviewed
 
             require_reviewed(cfg, profile)
@@ -884,20 +900,7 @@ def _run(args, cfg):
                 )
             else:
                 row = selected[0]
-                if args.command == "resume":
-                    item = materials.tailored_resume(cfg, conn, profile, row)
-                    console.print(_text(item["path"]))
-                    console.print(_text(materials.resume_source_diff(cfg, item["content"])))
-                elif args.command == "letter-pdf":
-                    console.print(_text(str(materials.build_letter_pdf(cfg, conn, profile, row))))
-                else:
-                    path, issues = materials.build_resume_pdf(cfg, conn, profile, row)
-                    console.print(_text(path))
-                    for issue in issues:
-                        console.print(_text("ATS WARNING: " + issue))
-                    if issues:
-                        return 1
-                    console.print("ATS check passed: name, email and sections extract in order.")
+                console.print(_text(str(materials.build_letter_pdf(cfg, conn, profile, row))))
             return 0
         rows = _select(
             ranked, args, review=args.command == "review", min_score=cfg.analyst.min_score
@@ -948,7 +951,7 @@ def main(argv=None) -> int:
     autopilot.add_argument("--no-scan", action="store_true", help="Use stored approved queue only")
     prepare = sub.add_parser(
         "prepare",
-        help="Create any missing or stale letter, resume, PDF and answers; ask what is unknown",
+        help="Create any missing or stale letter and answers, check the resume PDF; ask what is unknown",
     )
     prepare.add_argument("job", type=_positive)
     letters = sub.add_parser("letters", help="Batch checked cover letters at analyst.min_score")
@@ -956,13 +959,16 @@ def main(argv=None) -> int:
     letters.add_argument(
         "--force", action="store_true", help="Create a new version even if current"
     )
-    for command, help_text in (
-        ("resume", "Tailor reviewed facts as editable Markdown"),
-        ("pdf", "Build job resume PDF and run ATS checks"),
-        ("letter-pdf", "Build a PDF of the saved cover letter"),
-    ):
-        preparation = sub.add_parser(command, help=help_text)
-        preparation.add_argument("job", type=_positive)
+    letter_pdf = sub.add_parser("letter-pdf", help="Build a PDF of the saved cover letter")
+    letter_pdf.add_argument("job", type=_positive)
+    sub.add_parser(
+        "resume", help="Check the resume PDF that applications attach unchanged (resume_pdf)"
+    )
+    from_pdf = sub.add_parser(
+        "resume-from-pdf", help="Write resume.md from the text of your resume PDF"
+    )
+    from_pdf.add_argument("--pdf", type=Path, help="Resume PDF (default: resume_pdf in config)")
+    from_pdf.add_argument("--force", action="store_true", help="Replace an existing resume.md")
     screening = sub.add_parser(
         "answers", help="Answer missing screening questions; reuse answers.yaml"
     )
@@ -979,11 +985,10 @@ def main(argv=None) -> int:
         "import", help="Review and import an externally edited material"
     )
     material_import.add_argument("job", type=_positive)
-    material_import.add_argument("--kind", required=True, choices=["letter", "resume", "answers"])
+    material_import.add_argument("--kind", required=True, choices=["letter", "answers"])
     diff = sub.add_parser("diff", help="Diff latest two material versions")
     diff.add_argument("job", type=_positive)
-    diff.add_argument("--kind", choices=["letter", "resume", "answers"])
-    diff.add_argument("--source", action="store_true", help="Compare resume file with resume.md")
+    diff.add_argument("--kind", choices=["letter", "answers"])
     mark = sub.add_parser("state", help="Set preparation state (approval/submitted require review)")
     mark.add_argument("job", type=_positive)
     mark.add_argument(

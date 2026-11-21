@@ -82,9 +82,16 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
         )
     if profile is not None:
         from app.resume import resume_status
+        from app.resume_pdf import check as check_pdf
+        from app.resume_pdf import pdf_path
 
         state, detail = resume_status(configured or cfg, profile)
-        fill = "Fill resume.md with your resume (see resume.example.md)"
+        has_pdf = pdf_path(configured or cfg).is_file()
+        fill = (
+            "uv run bio-jobs resume-from-pdf"
+            if has_pdf
+            else "Fill resume.md with your resume (see resume.example.md)"
+        )
         extract = "uv run bio-jobs extract-profile --force"
         report(
             "Resume",
@@ -94,6 +101,22 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
             if state in ("missing", "empty", "example")
             else f"{detail}; run {extract}",
             step=(3, fill) if state in ("missing", "empty", "example") else (4, extract),
+            warn=True,
+        )
+        resume_md = ""
+        if state not in ("missing", "empty"):
+            resume_md = (
+                (configured or cfg)
+                .resolved((configured or cfg).resume_path)
+                .read_text(encoding="utf-8")
+            )
+        pdf = check_pdf(configured or cfg, profile, resume_md)
+        report(
+            "Resume PDF",
+            pdf.ok,
+            f"{pdf.path} (attached unchanged)",
+            "; ".join(pdf.problems),
+            step=(2, f"Save your resume PDF at {pdf.path}") if not has_pdf else None,
             warn=True,
         )
         try:

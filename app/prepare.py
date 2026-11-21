@@ -10,9 +10,9 @@ from pathlib import Path
 
 import yaml
 
-from app import answers, materials
+from app import answers, forms, materials, resume_pdf
 from app.candidate.profile import import_profile
-from app.resume import digest, require_reviewed
+from app.resume import require_reviewed, resume_text
 
 TERMINAL = ("submitted", "unknown_result", "withdrawn")
 
@@ -23,6 +23,7 @@ class Prepared:
     current: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unanswered: list[dict] = field(default_factory=list)
+    form_read: bool = False
 
 
 def edited_message(row, kind):
@@ -44,15 +45,8 @@ def status(conn, row, kind, version):
     return "current", item
 
 
-def pdf_current(item):
-    if not item or not item["pdf_path"] or item["ats_warnings"] is None:
-        return False
-    path = Path(item["pdf_path"])
-    return path.exists() and item["pdf_hash"] == digest(path.read_bytes().hex())
-
-
 def prepare_materials(cfg, conn, profile, row, *, output=print):
-    """Create a missing or stale letter, resume and checked resume PDF."""
+    """Create a missing or stale letter and check the supplied resume PDF."""
     require_reviewed(cfg, profile)
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
     if current and current[0] in TERMINAL:
@@ -77,36 +71,34 @@ def prepare_materials(cfg, conn, profile, row, *, output=print):
         except (ValueError, RuntimeError) as exc:
             result.problems.append(f"Letter failed: {exc}")
 
-    found, item = status(conn, row, "resume", version)
-    if found == "edited":
-        result.problems.append(edited_message(row, "resume"))
-        return result
-    if found == "current":
-        result.current.append("resume")
-    else:
-        item = materials.tailored_resume(cfg, conn, profile, row)
-        result.created.append("resume")
-    if pdf_current(item):
+    # The supplied resume PDF is attached as it is; only check that it can be read.
+    pdf = resume_pdf.check(cfg, profile, resume_text(cfg))
+    if pdf.ok:
         result.current.append("resume PDF")
     else:
-        output("Building the resume PDF and checking it for ATS...")
-        try:
-            _, issues = materials.build_resume_pdf(cfg, conn, profile, row)
-            result.created.append("resume PDF")
-            if issues:
-                output("ATS check found problems; they are listed with the resume below.")
-        except (ValueError, RuntimeError, OSError) as exc:
-            result.problems.append(f"Resume PDF failed: {exc}")
+        result.problems.extend("Resume PDF: " + problem for problem in pdf.problems)
     return result
 
 
-def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print):
-    """Ask only what answers.yaml cannot answer, then refresh the draft if it is out of date."""
+def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print, read_form=None):
+    """Read the form's questions, ask only what answers.yaml cannot answer, then refresh the draft."""
     version = import_profile(conn, profile)
     found, item = status(conn, row, "answers", version)
     if found == "edited":
         result.problems.append(edited_message(row, "answers"))
         return result
+    result.form_read = (
+        forms.refresh(
+            cfg,
+            conn,
+            profile,
+            row,
+            cv=resume_text(cfg),
+            output=output,
+            read=read_form or forms.read_form,
+        )
+        is not None
+    )
     if interactive and any(not i["answer"] for i in answers.plan(cfg, conn, row)):
         output("Screening questions the answer bank cannot answer:")
         answers.ask_missing(cfg, conn, row, interactive=True, output=output)

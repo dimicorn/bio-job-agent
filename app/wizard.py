@@ -255,6 +255,7 @@ def setup(cfg: Settings) -> bool:
         f"Imported profile version {version} from {candidate}; reviewed={profile.reviewed}."
     )
     resume = configured.resolved(configured.resume_path)
+    extracted_now = _resume_from_pdf(configured, resume)
     example = ROOT / "resume.example.md"
     if not resume.exists() and example.exists():
         resume.parent.mkdir(parents=True, exist_ok=True)
@@ -274,13 +275,41 @@ def setup(cfg: Settings) -> bool:
             console.print(
                 f"{label}: check failed. Run bio-jobs doctor; correct config/credentials and rerun setup."
             )
-    if passed:
+    if passed and not extracted_now:
         _offer_extraction(configured, candidate, profile)
     from app.doctor import collect
 
     _rows, step = collect(cfg)
     console.print(f"Next step: {step}" if step else "Setup complete. Run uv run bio-jobs doctor.")
     return passed
+
+
+def _resume_from_pdf(cfg: Settings, resume) -> bool:
+    """Fill resume.md from the resume PDF's text; ask before replacing a real resume.md."""
+    from app.resume import resume_status_text
+    from app.resume_pdf import pdf_path, write_resume_md
+
+    pdf = pdf_path(cfg)
+    if not pdf.is_file():
+        console.print(
+            f"No resume PDF at {pdf}. Save your resume PDF there: applications attach it "
+            "unchanged, and setup can fill resume.md from its text."
+        )
+        return False
+    console.print(f"Resume PDF: {pdf} (attached to applications unchanged).")
+    filled = resume_status_text(resume) == "filled"
+    if filled and not _yes(f"Replace {resume} with text extracted from the PDF?"):
+        return False
+    try:
+        write_resume_md(cfg, force=filled)
+    except (ValueError, OSError) as exc:
+        console.print(f"Could not extract the PDF text: {exc}")
+        return False
+    console.print(
+        f"Wrote {resume} from the PDF. Check it against your PDF and correct anything the "
+        "extraction got wrong, then run uv run bio-jobs extract-profile --force."
+    )
+    return True
 
 
 def _current_llm(cfg: Settings) -> str | None:

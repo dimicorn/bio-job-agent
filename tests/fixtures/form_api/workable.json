@@ -1,0 +1,21 @@
+[
+  {"name": "Personal information", "fields": [
+    {"id": "firstname", "label": "First name", "required": true, "type": "text"},
+    {"id": "lastname", "label": "Last name", "required": true, "type": "text"},
+    {"id": "email", "label": "Email", "required": true, "type": "email"},
+    {"id": "headline", "label": "Headline", "required": false, "type": "text"},
+    {"id": "CA_1", "label": "Do you have the right to work in the example country?", "required": true, "type": "multiple", "singleOption": true, "options": [{"name": "1", "value": "Yes"}, {"name": "2", "value": "No"}]},
+    {"id": "phone", "label": "Phone", "required": false, "type": "phone"},
+    {"id": "address", "label": "Address", "required": false, "type": "text", "value": "Prefilled City", "prefilledByLocation": true}
+  ]},
+  {"name": "Profile", "fields": [
+    {"id": "education", "label": "Education", "required": false, "type": "group", "fields": [{"id": "school", "label": "School", "required": true, "type": "text"}]},
+    {"id": "avatar", "label": "Photo", "required": false, "type": "file"},
+    {"id": "resume", "label": "Resume", "required": true, "type": "file"}
+  ]},
+  {"name": "Details", "fields": [
+    {"id": "cover_letter", "label": "Cover letter", "required": true, "type": "paragraph"},
+    {"id": "QA_1", "label": "What is your current notice period?", "required": true, "type": "paragraph"},
+    {"id": "QA_2", "label": "Are you willing to relocate?", "required": false, "type": "boolean"}
+  ]}
+]
