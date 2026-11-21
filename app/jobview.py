@@ -267,6 +267,8 @@ def heading(row, *, target=None) -> None:
         )
     for note in link_lines(row):
         target.print(text(note, "yellow"))
+    for note in board_lines(row):
+        target.print(text(note, "yellow"))
     if len(row.get("grouped_job_ids", [])) > 1:
         target.print(text(f"Grouped stored job IDs: {row['grouped_job_ids']}", "dim"))
 
@@ -292,6 +294,20 @@ def link_lines(row) -> list[str]:
         "Added by link; normally excluded by: " + "; ".join(notes),
         "Kept for you to decide: save (s) or reject (r).",
     ]
+
+
+def board_lines(row) -> list[str]:
+    boards = row.get("board_sources") or []
+    if not boards:
+        return []
+    where = ", ".join(boards)
+    if row.get("employer_reviewed"):
+        return [f"Also listed on job board {where}."]
+    note = (
+        f"From job board {where}: {row['employer']} is not on the reviewed watchlist;"
+        " check it is a commercial life-sciences employer before applying."
+    )
+    return [note]
 
 
 def card(row, *, target=None) -> None:

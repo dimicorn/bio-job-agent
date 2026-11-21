@@ -104,6 +104,9 @@ def snapshot(html: str, url: str) -> dict:
 
 
 class Site(Adapter):
+    # Page watchers see only what one page links to; they never close listings.
+    closes_missing = False
+
     @property
     def endpoint(self):
         return self.source.board

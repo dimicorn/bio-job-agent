@@ -87,6 +87,11 @@ class PublicClient:
 
 
 class Adapter:
+    # A complete snapshot lets two absences close an origin; partial views never do.
+    closes_missing = True
+    # Job boards carry many employers; each posting names its own.
+    per_job_employer = False
+
     def __init__(self, source: SourceConfig, client: PublicClient):
         self.source = source
         self.client = client

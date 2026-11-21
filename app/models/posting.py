@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator, model_vali
 class SourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    adapter: Literal["greenhouse", "lever", "ashby", "workable", "site"]
+    adapter: Literal["greenhouse", "lever", "ashby", "workable", "site", "jsonfeed"]
     board: str
     links: str = ""
     employer: str
@@ -30,7 +30,7 @@ class SourceConfig(BaseModel):
     def valid_board(self):
         import re
 
-        if self.adapter == "site":
+        if self.adapter in {"site", "jsonfeed"}:
             Posting.public_link(self.board)
         elif not re.fullmatch(r"[a-zA-Z0-9_-]+", self.board):
             raise ValueError("Expected a public board slug")

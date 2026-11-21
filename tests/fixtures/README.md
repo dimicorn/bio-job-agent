@@ -16,4 +16,6 @@ Additional source fixtures (2026-11-15):
 
 `firms.yaml` is the active watchlist; `bio-jobs firms --validate` checks public access, payloads and employer identity without opening the local database. Site snapshots preserve public text/link changes in `raw_postings`; they are for manual review and do not claim that the page itself is a scientist vacancy.
 
+`biotechnologyjobs.json` (2026-11-21): six items recorded from the public JSON Feed `https://biotechnologyjobs.co.uk/jobs.json` (CC BY 4.0, Biotechnology Jobs, https://biotechnologyjobs.co.uk/): Isomorphic Labs, Genomics, a recruitment agency, a university, a remote GB role and a US role. Feed metadata, item IDs, URLs, titles, employers, dates, tags, locations and salaries are recorded; descriptions and summaries are synthetic, and education, experience and benefits fields are removed.
+
 Form question fixtures (`form_api/`, 2026-11-21) are synthetic. Their structure follows the public Greenhouse `?questions=true` response, the Lever `…/apply` page markup and the Workable `api/v1/jobs/<shortcode>/form` response; every label, option, ID and URL is invented.

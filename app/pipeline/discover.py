@@ -7,7 +7,8 @@ import httpx
 
 from app.candidate.profile import import_profile
 from app.pipeline.dedupe import handover, store_job
-from app.pipeline.filter import exclusion
+from app.pipeline.filter import board, exclusion
+from app.pipeline.normalize import key
 from app.runlog import record
 from app.sources.base import PublicClient, RateLimited
 from app.sources.registry import ADAPTERS
@@ -36,6 +37,26 @@ def register_source(conn, source):
         (source.id, employer_id, source.adapter, source.board, source.model_dump_json()),
     )
     return employer_id
+
+
+def posting_employer(conn, job, sources):
+    """Employer row for a job board posting: reviewed when it is a watchlist employer.
+
+    Sharing the watchlist row lets a board copy group with the employer's own ATS posting.
+    Any other employer is stored unreviewed; the board filters still vet each posting.
+    """
+    wanted = key(job.employer)
+    for source in sources:
+        if source.industry_verified and not board(source) and key(source.employer) == wanted:
+            return register_source(conn, source)
+    for row in conn.execute("SELECT id,name FROM employers ORDER BY id"):
+        if key(row["name"]) == wanted:
+            return row["id"]
+    return conn.execute(
+        """INSERT INTO employers(name,industry,review_url,industry_verified)
+        VALUES (?,'unreviewed',?,0)""",
+        (job.employer, job.source_url),
+    ).lastrowid
 
 
 def discover(
@@ -139,7 +160,12 @@ def discover(
                             (raw_id, source.id, external_id),
                         )
                     else:
-                        store_job(conn, job, source.id, employer_id, raw_id, now)
+                        owner = (
+                            posting_employer(conn, job, sources)
+                            if adapter.per_job_employer
+                            else employer_id
+                        )
+                        store_job(conn, job, source.id, owner, raw_id, now)
                         counts["accepted"] += 1
                 status = (
                     "partial"
@@ -151,7 +177,7 @@ def discover(
                         "UPDATE sources SET last_success_at=?,last_count=?,consecutive_failures=0 WHERE id=?",
                         (now, counts["fetched"], source.id),
                     )
-                    if source.adapter != "site":
+                    if adapter.closes_missing:
                         close_missing(conn, source.id, seen)
                 else:
                     error = "Incomplete snapshot; no vacancies expired"
