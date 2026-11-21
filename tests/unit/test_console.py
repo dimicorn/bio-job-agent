@@ -29,6 +29,8 @@ def test_progress_line_is_timestamped_with_symbol(monkeypatch):
 
 
 def test_untrusted_text_never_becomes_markup_or_escapes(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     target, file = capture(monkeypatch, terminal=True)
     shared.log(fail("[bold red]Acme[/] \x1b[2J\x1b]8;;http://x\x07Lab"))
     target.print(shared.text("[link=http://evil]Job[/link]"))
