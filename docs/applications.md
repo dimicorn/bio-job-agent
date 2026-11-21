@@ -291,7 +291,7 @@ CAPTCHA, sign-in or MFA still stops for you. Filled-form and confirmation screen
 version IDs, the approved answer-bank snapshot, verification hashes, reasons and confirmation evidence. Screenshots contain personal data; keep
 custom profile/audit locations private and ignored too. On a stop or timeout, the CLI
 disconnects and leaves the browser open. Close the tab after manual handling. The next attempt
-opens a fresh tab, preserving previous handoffs. Scheduling and notifications are handled by the separate `watch` command described in the README.
+opens a fresh tab, preserving previous handoffs. Scheduling and notifications are handled by the separate `watch` command described in [scheduled runs and alerts](watch.md).
 
 ## Material tests
 
