@@ -104,10 +104,22 @@ def approve(
     return paths
 
 
-def score_gate_message(cfg, row, *, apply=False):
-    threshold = max(cfg.apply.min_score, cfg.analyst.min_score) if apply else cfg.analyst.min_score
+def score_threshold(cfg, *, unattended=False):
+    """apply.min_score bars only unattended automatic submission; a person's approval is the check."""
+    if unattended or cfg.apply.mode == "auto":
+        return max(cfg.apply.min_score, cfg.analyst.min_score)
+    return cfg.analyst.min_score
+
+
+def score_gate_message(cfg, row, *, apply=False, unattended=False):
+    threshold = score_threshold(cfg, unattended=unattended) if apply else cfg.analyst.min_score
     score = row.get("score")
     reason = "unscored" if score is None else f"score {score} is below {threshold}"
+    if apply and score is not None and score >= cfg.analyst.min_score:
+        return (
+            f"Job {row['id']} skipped: {reason} (apply.min_score threshold for automatic submission). "
+            "Apply in manual or assisted mode, or override the score with v in review."
+        )
     return (
         f"Job {row['id']} is {reason} (threshold {threshold}). Run bio-jobs analyze; "
         "or bio-jobs review --all-scores and use v to override with a reason."
@@ -119,8 +131,8 @@ def check_gates(
 ):
     now = now or datetime.now().astimezone()
     gate = cfg.apply
-    if row.get("score") is None or row["score"] < max(gate.min_score, cfg.analyst.min_score):
-        raise ValueError(score_gate_message(cfg, row, apply=True))
+    if row.get("score") is None or row["score"] < score_threshold(cfg, unattended=unattended):
+        raise ValueError(score_gate_message(cfg, row, apply=True, unattended=unattended))
     current = conn.execute(
         "SELECT state,submitted_at FROM applications WHERE job_id=?", (row["id"],)
     ).fetchone()

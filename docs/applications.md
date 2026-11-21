@@ -191,7 +191,7 @@ apply:
   auto_llm_answers: false
   daily_limit: 5
   max_per_run: 5
-  min_score: 80
+  min_score: 80      # automatic submission only (auto mode, autopilot)
   active_hours: [8, 23]
   answers_file: answers.yaml
   browser_channel: chrome   # chrome | chromium
@@ -274,8 +274,11 @@ question, rebuild `answers` and approve again.
 
 ## Submission safeguards
 
-Browser modes recheck approval, material integrity, the higher of analyst/apply score
-thresholds and local active hours before submission. Daily slots are reserved atomically
+Browser modes recheck approval, material integrity, the score threshold and local active
+hours before submission. Attended modes (`manual`, `assisted`, `dry_run`) need only
+`analyst.min_score`; `auto` mode and unattended runs (autopilot, scheduled watch) need the
+higher of `analyst.min_score` and `apply.min_score` and skip lower jobs with a reason, even
+if you approved them. Daily slots are reserved atomically
 across processes; attempts count conservatively against the local-day limit, including
 manual stops and uncertain results. `max_per_run` bounds attempts. A missing acknowledgement
 becomes `unknown_result`, never an automatic retry. A crash during an attempt, a human

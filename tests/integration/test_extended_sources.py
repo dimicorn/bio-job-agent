@@ -293,7 +293,7 @@ def test_new_adapter_failure_continues_and_workable_provenance(conn, profile, so
 def test_watchlist_loads_and_preserves_explicit_boards():
     firms = load_firms()
     sources = load_sources(DEFAULT_WATCHLIST.parent / "config/sources.yaml")
-    assert len(firms) == 17
+    assert len(firms) == 28
     assert {f.ats for f in firms} == {"greenhouse", "lever", "workable", "site", "ashby"}
     assert len({(s.adapter, s.board) for s in sources}) == len(sources)
     assert sources[0].id == "mytos-lever"
@@ -331,7 +331,7 @@ def test_firms_cli_works_without_profile_or_database(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["bio-jobs", "firms"])
     monkeypatch.setattr(cli, "connect", lambda *a: pytest.fail("firms must not open database"))
     assert cli.main() == 0
-    assert len(json.loads(capsys.readouterr().out)) == 17
+    assert len(json.loads(capsys.readouterr().out)) == 28
 
 
 @pytest.mark.parametrize(

@@ -23,8 +23,10 @@ From your clone on macOS or Linux (Python 3.12+, SQLite 3.24+ with JSON1):
 7. Run `uv run bio-jobs doctor` and fix what it reports.
 8. Run `uv run bio-jobs scan`, then `uv run bio-jobs review`.
 
-`scan` refuses to score until the profile is reviewed. Jobs scoring below
-`apply.min_score` (default 80) in `config.yaml` are not applied to. See
+`scan` refuses to score until the profile is reviewed. Review shows jobs scoring at
+least `analyst.min_score` (default 50), and you can approve any of them yourself.
+`apply.min_score` (default 80) in `config.yaml` is the bar for automatic submission
+only: `auto` mode and autopilot skip jobs below it. See
 [installation and candidate setup](docs/setup.md).
 
 Profile extraction, scoring, and letter drafting send candidate data to your
