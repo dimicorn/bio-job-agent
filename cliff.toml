@@ -1,0 +1,58 @@
+# git-cliff configuration: `uvx git-cliff -o CHANGELOG.md` (see CONTRIBUTING.md).
+
+[changelog]
+header = """
+# Changelog\n
+"""
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+            {% if commit.breaking %}[**breaking**] {% endif %}\
+            {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+    {% endfor %}
+{% endfor %}\n
+"""
+trim = true
+output = "CHANGELOG.md"
+
+[git]
+conventional_commits = true
+# Keep the plain imperative messages from before Conventional Commits were adopted;
+# the verb parsers below sort them into groups.
+filter_unconventional = false
+commit_parsers = [
+  # PRs land as merge commits; each change is listed once, from its branch commits.
+  # Plain (pre-Conventional) messages carry their body in the message: only the subject is shown.
+  { message = "^Merge ", skip = true },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^feat", group = "<!-- 00 -->🚀 Features" },
+  { message = "^fix", group = "<!-- 01 -->🐛 Bug Fixes" },
+  { message = "^doc", group = "<!-- 03 -->📚 Documentation" },
+  { message = "^perf", group = "<!-- 04 -->⚡ Performance" },
+  { message = "^refactor", group = "<!-- 02 -->🚜 Refactor" },
+  { message = "^style", group = "<!-- 05 -->🎨 Styling" },
+  { message = "^test", group = "<!-- 06 -->🧪 Testing" },
+  { message = "^chore|^ci|^build", group = "<!-- 07 -->⚙️ Miscellaneous Tasks" },
+  { body = ".*security", group = "<!-- 08 -->🛡️ Security" },
+  { message = "^revert", group = "<!-- 09 -->◀️ Revert" },
+  # History before Conventional Commits, by leading verb.
+  { message = "^Apply ruff format", group = "<!-- 05 -->🎨 Styling" },
+  { message = "^(Add|Implement|Support)\\b", group = "<!-- 00 -->🚀 Features" },
+  { message = "^(Fix|Handle|Correct)\\b", group = "<!-- 01 -->🐛 Bug Fixes" },
+  { message = "^Document\\b|README", group = "<!-- 03 -->📚 Documentation" },
+  { message = "^Test\\b", group = "<!-- 06 -->🧪 Testing" },
+  { message = "^(Refactor|Move|Rename)\\b", group = "<!-- 02 -->🚜 Refactor" },
+  { message = ".*", group = "<!-- 10 -->💼 Other" },
+]
+sort_commits = "newest"
+
+[remote.github]
+owner = "dimicorn"
+repo = "bio-job-agent"
