@@ -539,10 +539,11 @@ def run(
     ]
     if job:
         row = next(r for r in rows if r["id"] == job)
-        if row.get("score") is None or row["score"] < max(
-            cfg.apply.min_score, cfg.analyst.min_score
-        ):
-            raise ValueError(applications.score_gate_message(cfg, row, apply=True))
+        threshold = applications.score_threshold(cfg, unattended=unattended)
+        if row.get("score") is None or row["score"] < threshold:
+            raise ValueError(
+                applications.score_gate_message(cfg, row, apply=True, unattended=unattended)
+            )
     if job and not selected:
         raise ValueError("Approve the job in review before applying")
     from app.pipeline.normalize import key

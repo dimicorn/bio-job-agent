@@ -64,7 +64,7 @@ apply:
   mode: manual  # manual | assisted | auto | dry_run (fill, screenshot, never Submit)
   daily_limit: 5
   max_per_run: 5
-  min_score: 80
+  min_score: 80                     # automatic submission only (auto mode, autopilot); attended modes use analyst.min_score
   active_hours: [8, 23]  # local time, inclusive start / exclusive end
   answers_file: answers.yaml
   browser_channel: chrome            # chrome: installed Google Chrome; chromium: Playwright's

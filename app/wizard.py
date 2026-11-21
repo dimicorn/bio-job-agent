@@ -204,7 +204,14 @@ def setup(cfg: Settings) -> bool:
                     apply = Apply.model_validate(
                         {
                             **apply.model_dump(),
-                            field: int(_ask(f"Apply {field}", str(getattr(apply, field)))),
+                            field: int(
+                                _ask(
+                                    "Apply min_score (automatic submission only)"
+                                    if field == "min_score"
+                                    else f"Apply {field}",
+                                    str(getattr(apply, field)),
+                                )
+                            ),
                         }
                     )
                     break
