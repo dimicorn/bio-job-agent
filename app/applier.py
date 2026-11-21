@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import random
 import re
 import time
 import uuid
@@ -33,6 +34,9 @@ SENSITIVE = re.compile(
     r"test task|work sample|coding challenge|take.home assignment|psychometric)\b",
     re.IGNORECASE,
 )
+
+# A person reviews the filled form: in assisted mode before Submit, in dry run instead of it.
+PERSON_REVIEWED = ("assisted", "dry_run")
 
 DEMOGRAPHIC = re.compile(
     r"\b(gender|sex|sexual|race|racial|ethnic\w*|disabilit\w*|veteran|religion|demograph\w*|equal opportunit\w*)\b",
@@ -207,7 +211,34 @@ class FormApplier:
         self.scope.locator("input,textarea,[role=combobox],[data-field-path]").first.wait_for(
             state="attached", timeout=20000
         )
+        # Read the job before filling, as a person would.
+        self.pause(self.cfg.apply.read_seconds)
         self.check_safety()
+
+    def pause(self, bounds):
+        low, high = bounds
+        if high > 0:
+            self.page.wait_for_timeout(random.uniform(low, high) * 1000)
+
+    def type_text(self, node, text):
+        """Type character by character; line breaks and tabs are inserted, never pressed as keys."""
+        low, high = self.cfg.apply.typing_delay_ms
+        node.fill("")
+        if not node.evaluate("e => e.matches('textarea') || e.isContentEditable"):
+            # A line break in a single-line input submits the form; the browser drops it anyway.
+            text = re.sub(r"[\r\n]", "", text)
+        for chunk in re.split(r"([\r\n\t])", text):
+            if not chunk:
+                continue
+            if chunk in "\r\n\t":
+                node.focus()
+                self.page.keyboard.insert_text(chunk)
+            elif high <= 0:
+                node.press_sequentially(chunk)
+            else:
+                for character in chunk:
+                    node.press_sequentially(character)
+                    self.page.wait_for_timeout(random.uniform(low, high))
 
     def form_url(self, url):
         return url
@@ -346,7 +377,7 @@ class FormApplier:
                         re.IGNORECASE,
                     )
                 )
-                if self.cfg.apply.mode == "assisted" and consent:
+                if self.cfg.apply.mode in PERSON_REVIEWED and consent:
                     deferred.append(label)
                 else:
                     stops.append(f"Human declaration/assessment required: {label}")
@@ -454,7 +485,7 @@ class FormApplier:
             self.event("plan", field=field["label"], source=source, reason=reason)
         if stops or deferred:
             reasons = stops + [f"Consent requires a person: {label}" for label in deferred]
-            if self.cfg.apply.mode == "assisted" and steps:
+            if self.cfg.apply.mode in PERSON_REVIEWED and steps:
                 raise PartialPlanStop(steps, reasons)
             raise FormStop("; ".join(reasons))
         if not steps:
@@ -574,8 +605,8 @@ class FormApplier:
         else:
             if len(values) != 1:
                 raise FormStop(f"Multiple answers for text field: {f['label']}")
-            node.fill(values[0])
-        self.page.wait_for_timeout(self.cfg.apply.action_seconds * 1000)
+            self.type_text(node, values[0])
+        self.pause(self.cfg.apply.action_seconds)
         self.event("fill", field=f["label"], source=step.source)
         self.verify_one(step)
 

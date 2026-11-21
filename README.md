@@ -88,17 +88,19 @@ Every generated claim cites reviewed facts and is checked for unsupported conten
 
 ### Apply
 
-Applications default to `apply.mode: manual`, which opens the apply link for you to complete. Assisted and auto modes use Playwright-driven Chromium on supported Greenhouse, Lever, Workable and Ashby forms, only for jobs you explicitly approved:
+Applications default to `apply.mode: manual`, which opens the apply link for you to complete. Assisted, auto and dry-run modes drive your installed Google Chrome (or Playwright Chromium when Chrome is missing) on a separate private profile, typing at a person's pace, on supported Greenhouse, Lever, Workable and Ashby forms, only for jobs you explicitly approved:
 
 - **manual**: opens the link; record a submission you completed with `t` in review.
 - **assisted**: fills and verifies the form, then waits for you to press Submit.
 - **auto**: presses Submit once and waits for an acknowledgement; runs only within `active_hours` and score, daily and per-run limits.
+- **dry_run**: fills and verifies the form, saves a screenshot in the job's materials folder and closes it without pressing Submit; the job stays approved and no limit or cooldown is used.
 
 ```sh
 uv run bio-jobs apply 42      # one previously approved job
 uv run bio-jobs apply         # approved queue, bounded by max_per_run
 uv run bio-jobs autopilot     # auto mode: sync/score, then consume approved queue
 uv run bio-jobs run --no-scan # alias; use stored approved queue only
+uv run bio-jobs apply 42 --mode dry_run   # rehearse: fill and screenshot, never Submit
 ```
 
 Sensitive questions (visa, work authorization, legal declarations, demographics, assessments) are only filled from your stored answers, never by the LLM. Sign-in, MFA, visible CAPTCHA and unknown required questions stop the job for you; nothing is bypassed. A missing acknowledgement becomes `unknown_result` and is never retried automatically. A per-employer cooldown (`apply.company_cooldown_days`, default 30) prevents repeat applications. See [docs/applications.md](docs/applications.md) for the answers bank, per-ATS form filling, blocked-field explanations and submission safeguards.
@@ -117,8 +119,8 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
 | `prepare <job>` | Create any missing or stale letter, resume, resume PDF (with ATS check) and screening draft; show the letter claims; ask only the screening questions `answers.yaml` cannot answer |
-| `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
-| `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
+| `apply [job] [--mode dry_run]` | Fill one approved job or the approved queue in the configured apply mode; `--mode dry_run` never submits |
+| `autopilot` / `run [--no-scan] [--mode dry_run]` | One bounded auto pass; refresh and score first unless `--no-scan` |
 | `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |
 | `letters`, `resume`, `pdf`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Optionally redo one material, compare, import and track application materials ([docs/applications.md](docs/applications.md)) |
 | `unmerge JOB ORIGIN` | Separate a non-canonical origin from a grouped job |
@@ -182,7 +184,7 @@ A vacancy closes after its origin is absent from **two complete successful snaps
 
 Rerun `./setup.sh` to optionally install or update a macOS LaunchAgent (default **no**). Choose one or two distinct local hours; it uses the repository template `launchd/ru.bio-job-agent.watch.plist`, sets PATH for `~/.local/bin` and `/opt/homebrew/bin`, writes `logs/watch.log`, and does not run at load time. The script prints the exact `launchctl unload` command. Declining leaves an existing schedule unchanged. Linux prints a ready-to-copy cron entry and never modifies crontab; create the indicated logs directory first. The project directory must remain at the installed path.
 
-Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` adds the existing bounded autopilot queue pass; it still requires prior explicit approvals, current materials, active hours, score/limit gates and submission confirmation. Manual and assisted modes only sync, score and alert. Watch does not generate approvals or materials. A database-specific kernel file lock prevents overlapping watch passes, including their auto-apply phase. Process exit/crash releases it automatically; a retained lock file is harmless. SQLite state and the installed schedule survive restarts; the next scheduled or manual run proceeds normally.
+Schedules execute `uv run bio-jobs watch --scheduled`. Only `apply.mode: auto` adds the existing bounded autopilot queue pass; it still requires prior explicit approvals, current materials, active hours, score/limit gates and submission confirmation. Manual, assisted and dry-run modes only sync, score and alert. Watch does not generate approvals or materials. A database-specific kernel file lock prevents overlapping watch passes, including their auto-apply phase. Process exit/crash releases it automatically; a retained lock file is harmless. SQLite state and the installed schedule survive restarts; the next scheduled or manual run proceeds normally.
 
 ## Source operation, privacy and safety
 

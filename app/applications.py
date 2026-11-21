@@ -65,7 +65,7 @@ def approve(
 ):
     check_gates(cfg, conn, row, used=approved_this_run, now=now)
     if conn.execute(
-        "SELECT 1 FROM application_attempts WHERE job_id=? AND "
+        "SELECT 1 FROM application_attempts WHERE job_id=? AND mode != 'dry_run' AND "
         "(submission_possible=1 OR status='started')",
         (row["id"],),
     ).fetchone():
@@ -114,7 +114,9 @@ def score_gate_message(cfg, row, *, apply=False):
     )
 
 
-def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None, unattended=False):
+def check_gates(
+    cfg, conn, row, *, used=0, now=None, exclude_attempt=None, unattended=False, dry_run=False
+):
     now = now or datetime.now().astimezone()
     gate = cfg.apply
     if row.get("score") is None or row["score"] < max(gate.min_score, cfg.analyst.min_score):
@@ -133,6 +135,9 @@ def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None, unatt
         raise ValueError(
             f"Outside apply.active_hours ({now.tzinfo}); next allowed: {next_time.isoformat()}"
         )
+    if dry_run:
+        # A dry run never submits, so it neither uses nor needs an application slot.
+        return
     if used >= gate.max_per_run:
         raise ValueError("apply.max_per_run reached")
     # Reservations count too: concurrent processes cannot spend the same daily slot.
@@ -140,7 +145,7 @@ def check_gates(cfg, conn, row, *, used=0, now=None, exclude_attempt=None, unatt
         """SELECT count(*) FROM (
         SELECT job_id FROM applications WHERE submitted_at IS NOT NULL
           AND date(submitted_at,'localtime')=date(?,'localtime')
-        UNION SELECT job_id FROM application_attempts WHERE id != ?
+        UNION SELECT job_id FROM application_attempts WHERE id != ? AND mode != 'dry_run'
           AND date(started_at,'localtime')=date(?,'localtime'))""",
         (now.isoformat(), exclude_attempt or -1, now.isoformat()),
     ).fetchone()[0]

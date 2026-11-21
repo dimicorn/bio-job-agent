@@ -58,7 +58,9 @@ def prepared(tmp_path, conn, profile, sources, transport, monkeypatch):
             profile_dir=tmp_path / "browser",
             confirmation_timeout_seconds=0.1,
             submit_wait_minutes=0.01,
+            read_seconds=0,
             action_seconds=0,
+            typing_delay_ms=0,
         ),
     )
     cfg.resume_path.write_text("# Alex Example\nalex@example.org\n## Experience\nCell assays.\n")
@@ -431,7 +433,7 @@ def test_queue_limits_approved_only_and_stops_on_handoff(prepared, conn, page):
     closes = []
 
     class Browser:
-        def __init__(self, cfg):
+        def __init__(self, cfg, **kwargs):
             pass
 
         def page(self):
@@ -865,7 +867,7 @@ def test_interrupted_apply_reports_uncertain_state(prepared, conn, monkeypatch):
     output = []
 
     class Browser:
-        def __init__(self, cfg):
+        def __init__(self, cfg, **kwargs):
             pass
 
         def page(self):

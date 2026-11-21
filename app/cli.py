@@ -721,8 +721,13 @@ def _run(args, cfg):
                 output=lambda message: console.print(_text(message)),
             )
             return int(bool(result.get("errors")))
-        if args.command == "autopilot" and cfg.apply.mode != "auto":
-            raise ValueError("autopilot requires apply.mode: auto; review and approve jobs first")
+        if getattr(args, "mode", None):
+            cfg = cfg.model_copy(update={"apply": cfg.apply.model_copy(update={"mode": args.mode})})
+        if args.command == "autopilot" and cfg.apply.mode not in ("auto", "dry_run"):
+            raise ValueError(
+                "autopilot requires apply.mode: auto (or --mode dry_run); "
+                "review and approve jobs first"
+            )
         poll = args.command == "autopilot" and not args.no_scan
         if args.command in ("scan", "analyze") or poll:
             from app.resume import require_reviewed
@@ -942,10 +947,13 @@ def main(argv=None) -> int:
     sub.add_parser("analyze", help="Score stored jobs with missing or stale evaluations")
     apply = sub.add_parser("apply", help="Apply one approved job or the approved queue")
     apply.add_argument("job", nargs="?", type=_positive)
+    dry_help = "Fill and verify forms and save a screenshot, but never press Submit"
+    apply.add_argument("--mode", choices=["dry_run"], help=dry_help)
     autopilot = sub.add_parser(
         "autopilot", aliases=["run"], help="One auto pass: sync, score, then apply approved jobs"
     )
     autopilot.add_argument("--no-scan", action="store_true", help="Use stored approved queue only")
+    autopilot.add_argument("--mode", choices=["dry_run"], help=dry_help)
     prepare = sub.add_parser(
         "prepare",
         help="Create any missing or stale letter, resume, PDF and answers; ask what is unknown",

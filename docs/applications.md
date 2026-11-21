@@ -124,7 +124,7 @@ The setup wizard persists these settings in your local `config.yaml`:
 
 ```yaml
 apply:
-  mode: manual       # manual | assisted | auto
+  mode: manual       # manual | assisted | auto | dry_run
   auto_consent: false
   auto_llm_answers: false
   daily_limit: 5
@@ -132,11 +132,14 @@ apply:
   min_score: 80
   active_hours: [8, 23]
   answers_file: answers.yaml
+  browser_channel: chrome   # chrome | chromium
   profile_dir: data/browser-profile
   audit_dir: debug/apply
   submit_wait_minutes: 10
   confirmation_timeout_seconds: 45
-  action_seconds: 0.3
+  read_seconds: [3, 8]
+  action_seconds: [0.5, 1.5]
+  typing_delay_ms: [30, 90]
 ```
 
 ```bash
@@ -144,12 +147,32 @@ uv run bio-jobs apply 42           # one previously approved job
 uv run bio-jobs apply              # approved queue, bounded by max_per_run
 uv run bio-jobs autopilot          # auto mode: sync/score, then consume approved queue
 uv run bio-jobs run --no-scan       # alias; use stored approved queue only
+uv run bio-jobs apply 42 --mode dry_run      # fill and screenshot, never press Submit
+uv run bio-jobs autopilot --mode dry_run     # dry run over the approved queue
 ```
 
 `active_hours` restricts unattended auto application; manual and assisted actions are available at any hour. `manual` opens the link for completion yourself. `assisted` fills and verifies the form,
 then waits up to `submit_wait_minutes` for you to press Submit and for an acknowledgement.
 `auto` presses Submit once, then waits up to `confirmation_timeout_seconds` for an
-acknowledgement. Both browser modes support Greenhouse (including embedded forms), Lever,
+acknowledgement. `dry_run` (in config, or `--mode dry_run` on `apply` and `autopilot`) plans,
+fills and verifies the form exactly as the other browser modes do (it plans like assisted
+mode, so an unanswered single-option consent is filled around and then stops), saves a
+full-page screenshot to the job's private `materials/<job>/` folder, never presses Submit
+and closes the form. The CLI prints the screenshot path. A dry run is recorded as a dry-run
+attempt, not a submission: it uses no `daily_limit` or `max_per_run` slot, starts no
+company cooldown, leaves no retry barrier, and the job stays approved, so a real
+application can follow. A dry run that stops (mismatch, unknown required question,
+sign-in, CAPTCHA) also keeps the job approved and saves a `stopped` screenshot there.
+`active_hours` still applies to an unattended `autopilot --mode dry_run`.
+
+Filling is paced like a person: after the form opens the agent waits `read_seconds`,
+pauses `action_seconds` between fields, and types text character by character with a
+random `typing_delay_ms` between keys. Each range is `[min, max]` seconds (milliseconds
+for typing); a single number means a fixed value. Line breaks are inserted rather than
+pressed as Enter, and dropped from single-line inputs, so typing never submits a form.
+Selects, choice groups, menus and file uploads are set as before.
+
+All browser modes support Greenhouse (including embedded forms), Lever,
 Workable and Ashby when its board is enabled. Standard HTML controls, common React-select
 controls, Workable `data-ui` choice groups and listboxes (the optional-cookie banner is
 declined), Ashby field paths, yes/no buttons and location menus, and Lever question labels,
@@ -202,12 +225,19 @@ unlocked by a state change. A URL containing “confirmation” and a click alon
 
 ## Browser profile and audit trail
 
-Ordinary Chromium uses the gitignored persistent profile; no stealth plugins or fingerprint
-changes are used. Filled-form and confirmation screenshots are saved under the gitignored
+`apply.browser_channel: chrome` (the default) runs your installed Google Chrome; when
+Chrome is not installed the agent says so and uses Playwright's Chromium (`chromium`
+selects it directly). `doctor` shows which browser will be used. The browser runs on its
+own private (0700), gitignored persistent profile at `apply.profile_dir`, never your
+everyday Chrome profile. It is started as an ordinary local process without Playwright's
+`--enable-automation` switch and with `navigator.webdriver` left unset
+(`--disable-blink-features=AutomationControlled`); Playwright attaches over a loopback
+debugging port. No other stealth plugins or fingerprint changes are used, and a visible
+CAPTCHA, sign-in or MFA still stops for you. Filled-form and confirmation screenshots are saved under the gitignored
 `debug/apply` directory. Application events and attempt records in SQLite retain actions,
 version IDs, the approved answer-bank snapshot, verification hashes, reasons and confirmation evidence. Screenshots contain personal data; keep
 custom profile/audit locations private and ignored too. On a stop or timeout, the CLI
-disconnects and leaves Chromium open. Close the tab after manual handling. The next attempt
+disconnects and leaves the browser open. Close the tab after manual handling. The next attempt
 opens a fresh tab, preserving previous handoffs. Scheduling and notifications are handled by the separate `watch` command described in the README.
 
 ## Material tests
