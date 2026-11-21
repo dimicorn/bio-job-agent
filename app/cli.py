@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from app import answers, applications, materials, stop
+from app import answers, applications, keywords, materials, stop
 from app.candidate.profile import import_profile, load_profile
 from app.db import connect, migrate
 from app.pipeline.discover import discover
@@ -125,6 +125,7 @@ def _list(rows):
         "Posted / discovered",
         "Review / application",
         "Score / evidence / gaps",
+        "Resume keywords",
         "Apply link",
         title="Jobs — highest fit score first",
         show_lines=True,
@@ -148,6 +149,7 @@ def _list(rows):
                 else ""
             ),
             _text(_score_summary(row)),
+            _text(_keyword_cell(row)),
             Text("Open", style=f"link {row['apply_url']}"),
         )
     console.print(table)
@@ -163,6 +165,33 @@ def _list(rows):
                 soft_wrap=True,
             )
     console.print(f"{len(rows)} matching roles. Unscored jobs have no verified matching result.")
+
+
+def _keyword_cell(row):
+    if "keywords" not in row:
+        return ""
+    if row["keywords"] is None and not row.get("keywords_resume"):
+        return "no resume.md"
+    return keywords.summary(row["keywords"])
+
+
+def _keyword_lines(row, limit=8):
+    """Informational: the LLM score, score gate and filters never use this."""
+    match = row.get("keywords")
+    if not row.get("keywords_resume"):
+        return ["Resume keywords: no resume.md to compare"]
+    if not match:
+        return ["Resume keywords: no recognised job keywords (informational)"]
+    lines = [
+        f"Resume keywords: {match['score']}% — {len(match['present'])} of {match['total']} "
+        + "job keywords are in resume.md (informational; not part of the score)"
+    ]
+    for label, key in (("In resume", "present"), ("Missing", "missing")):
+        items = match[key]
+        if items:
+            more = f" (+{len(items) - limit} more)" if len(items) > limit else ""
+            lines.append(f"  {label}: " + ", ".join(items[:limit]) + more)
+    return lines
 
 
 def _score_summary(row):
@@ -214,6 +243,8 @@ def _review(conn, rows, cfg=None, profile=None):
             console.print(_text(f"company cooldown until {row['company_cooldown_until'][:10]}"))
         console.print(_text(row["description"]))
         console.print(_text(_score_summary(row)))
+        for line in _keyword_lines(row):
+            console.print(_text(line))
         if row.get("evaluation"):
             console.print(
                 _text(
@@ -902,6 +933,7 @@ def _run(args, cfg):
         rows = _select(
             ranked, args, review=args.command == "review", min_score=cfg.analyst.min_score
         )
+        keywords.attach_keyword_matches(conn, cfg, rows)
         if args.command == "list":
             _list(rows)
         elif args.command == "review":

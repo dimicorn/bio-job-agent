@@ -147,6 +147,9 @@ CSV_FIELDS = [
     "location",
     "geography",
     "score",
+    "keyword_match",
+    "keywords_present",
+    "keywords_missing",
     "remote_policy",
     "employment_type",
     "posted_at",
@@ -178,6 +181,11 @@ def export_csv(jobs):
     writer.writeheader()
     for job in jobs:
         row = {k: job.get(k) for k in CSV_FIELDS}
+        match = job.get("keywords")
+        if match:
+            row["keyword_match"] = match["score"]
+            row["keywords_present"] = "; ".join(match["present"])
+            row["keywords_missing"] = "; ".join(match["missing"])
         row["provenance"] = json.dumps(
             [
                 {"source": x["source_id"], "external_id": x["external_id"], "url": x["source_url"]}
