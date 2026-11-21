@@ -466,3 +466,43 @@ def test_resume_command_reports_missing_and_image_only_pdf(configured, make_pdf)
     make_pdf(cfg.resume_pdf_path, [])
     assert cli.main(["resume"]) == 1
     assert "no extractable text" in output.getvalue()
+
+
+def test_keyword_match_in_list_export_and_review(
+    configured, profile, sources, transport, monkeypatch
+):
+    import csv
+
+    from app.db import connect
+
+    cfg, output = configured
+    assert cli.main(["init"]) == 0
+    with connect(cfg.database_path) as conn:
+        discover(conn, profile, sources, transport=transport, pause=lambda _: None)
+    assert cli.main(["list", "--all-scores"]) == 0
+    assert "Resume keywords" in output.getvalue() and "no resume.md" in output.getvalue()
+
+    cfg.resume_path.write_text("# Synthetic\nDrug discovery scientist.", encoding="utf-8")
+    output.seek(0)
+    output.truncate(0)
+    assert cli.main(["list", "--all-scores"]) == 0
+    # Synthetic fixtures mention drug discovery and a multidisciplinary team.
+    assert "25% (1/4)" in output.getvalue() and "cross-functional" in output.getvalue()
+    with connect(cfg.database_path) as conn:
+        cached = conn.execute("SELECT count(*) FROM keyword_matches").fetchone()[0]
+    assert cached >= 1
+
+    path = cfg.llm_state_dir / "jobs.csv"
+    assert cli.main(["export", str(path), "--all-scores"]) == 0
+    rows = list(csv.DictReader(path.read_text(encoding="utf-8-sig").splitlines()))
+    assert {"keyword_match", "keywords_present", "keywords_missing"} <= set(rows[0])
+    assert any("drug discovery" in r["keywords_present"] for r in rows)
+
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "read_key", lambda: "q")
+    output.seek(0)
+    output.truncate(0)
+    assert cli.main(["review", "--all-scores"]) == 0
+    text = output.getvalue()
+    assert "Resume keywords:" in text and "not part of the score" in text
+    assert "In resume: drug discovery" in text

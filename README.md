@@ -43,6 +43,8 @@ Scores use configurable weights: specialization 30, technical 20, seniority/lead
 
 `analyst.batch_size` and `analyst.parallel` control scoring batches. Each evaluation stores the scoring version, content hash and reviewed profile version. Unchanged inputs reuse the saved evaluation; changes to job content, profile, preferences, weights or provider settings trigger scoring again. Old evaluations remain as history and are hidden when stale. User overrides store a separate score, recommendation and reason without rewriting model evidence. Failed batches remain unscored and `analyze` exits with an error; completed batches survive for the next run. `stats` groups tokens and costs by backend, model and purpose (`score`, `profile`, checks).
 
+Next to the LLM score, `list`, `review` and `export` show a **resume keyword match** computed without any LLM call: the share of the job's biotech/pharma R&D keywords (techniques, assays, modalities, therapeutic areas, platforms, multiword terms such as "flow cytometry" or "single-cell RNA-seq", and acronyms from the job text) that also appear in `resume.md`, with the top present and missing ones. Benefits, EEO, privacy and company-blurb text is ignored, and case, plurals, hyphens, British spellings and common abbreviations are folded together. The result is cached per job and recomputed when the job text or `resume.md` changes. It is informational only: it never changes the LLM score, the score gate or any filter. See [docs/keywords.md](docs/keywords.md).
+
 ```sh
 uv run bio-jobs list --employer Mytos --location London
 uv run bio-jobs review --status saved
@@ -128,7 +130,7 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
-| `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
+| `list` | Highest fit score first; score, evidence, gaps, uncertainty, resume keyword match, dates and apply link |
 | `prepare <job>` | Create any missing or stale letter and screening draft, check the resume PDF; show the letter claims; read the application form's questions and ask those `answers.yaml` cannot answer |
 | `resume` | Check the resume PDF that applications upload unchanged |
 | `resume-from-pdf [--pdf path] [--force]` | Write `resume.md` from the resume PDF's text; never replaces a filled `resume.md` without `--force` |
@@ -138,7 +140,7 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `letters`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Optionally redo one material, compare, import and track application materials ([docs/applications.md](docs/applications.md)) |
 | `unmerge JOB ORIGIN` | Separate a non-canonical origin from a grouped job |
 | `feed-review <feed.json>` | Experimental offline lead review ([docs/feed-review.md](docs/feed-review.md)) |
-| `export <file.csv>` | Export matching stored jobs, review decisions and provenance |
+| `export <file.csv>` | Export matching stored jobs, review decisions, resume keyword match and provenance |
 | `stats` | Job/review counts, source health, LLM calls, tokens and known costs |
 | `llm-check` | One tiny schema-validated request with configured failover |
 | `init` / `import-profile [path]` | Initialise/migrate SQLite or version a candidate profile |
