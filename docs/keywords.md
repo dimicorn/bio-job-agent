@@ -23,7 +23,12 @@ filter.
    similar). A company blurb ("About us", "Who we are") is dropped only when a content heading
    follows it, so a posting that opens with a blurb and runs straight into the job keeps its job
    text. Single sentences about salary, pension, holidays, insurance, share options, funding
-   rounds or protected characteristics are dropped wherever they appear.
+   rounds or protected characteristics are dropped wherever they appear. Text before the first
+   content heading that names the employer ("The Mission", "Isomorphic Labs is ...") is treated
+   as the company blurb. Bullets collapsed into " - " separators count as separate sentences, so
+   one benefits word cannot drop a whole requirements list. The employer's name and its variants
+   (without "Ltd", "Labs", "Therapeutics" and similar, and its initials) and the job's locations
+   and their initials ("Research Triangle Park" and "RTP") are removed before matching.
 2. **Keywords.** A fixed biotech/pharma R&D vocabulary in `app/keywords.py`: molecular and cell
    biology techniques, assays, biophysics, omics and sequencing, computational tools, modalities,
    therapeutic areas, discovery and development stages, process, quality and regulatory terms,
@@ -44,7 +49,8 @@ filter.
 ## Caching
 
 Results are stored in the `keyword_matches` table, one row per job with a hash of the job text,
-`resume.md` and the vocabulary version. `list`, `review` and `export` reuse the stored result
+`resume.md`, the job's employer and location and the extraction version, so a new version
+recomputes every job. `list`, `review` and `export` reuse the stored result
 and recompute only the jobs whose text or resume changed. There are no settings.
 
 ## Limits
