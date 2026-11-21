@@ -214,3 +214,5 @@ BIO_LIVE_SCORING=1 uv run pytest tests/integration/test_matching.py --live -m li
 ```
 
 The GitHub Actions [tests workflow](.github/workflows/tests.yml) runs ruff and the offline test suite (with Chromium installed) on every push and pull request.
+
+Commit conventions, the protected `main` branch and the release steps (CHANGELOG via git-cliff, versions from git tags) are in [CONTRIBUTING.md](CONTRIBUTING.md); release history is in [CHANGELOG.md](CHANGELOG.md).
