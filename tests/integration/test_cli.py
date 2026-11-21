@@ -6,7 +6,6 @@ import sys
 
 import pytest
 import yaml
-from rich.console import Console
 
 from app import cli, doctor, wizard
 from app.llm import Ping
@@ -16,7 +15,7 @@ from app.store import list_jobs
 
 
 @pytest.fixture
-def configured(tmp_path, monkeypatch):
+def configured(console_output, tmp_path, monkeypatch):
     cfg = Settings(
         _env_file=None,
         database_path=tmp_path / "jobs.sqlite3",
@@ -30,8 +29,7 @@ def configured(tmp_path, monkeypatch):
     cfg.config_path.write_text("analyst:\n  backend: command\n  command: /bin/echo\n")
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
-    for module in (cli, doctor, wizard):
-        monkeypatch.setattr(module, "console", Console(file=output, width=220, markup=False))
+    console_output(output, width=220)
     return cfg, output
 
 

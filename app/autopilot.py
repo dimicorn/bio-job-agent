@@ -15,6 +15,7 @@ from playwright.sync_api import Error as PlaywrightError
 
 from app import answers, applications, materials
 from app.applier import FormStop, PartialPlanStop, applier_for
+from app.console import blocked, detail, fail, log, ok, warn
 from app.private import private_dir, private_file, private_open
 from app.resume import digest
 
@@ -156,7 +157,7 @@ def screenshot(page, cfg, row, attempt, name, log):
     return path
 
 
-def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, unattended=None):
+def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=log, unattended=None):
     mode = cfg.apply.mode
     if mode not in ("assisted", "auto"):
         raise ValueError("Browser application requires assisted or auto mode")
@@ -213,17 +214,21 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                 for item in getattr(applier, "plan_summary", []):
                     if item["source"] == "needs_human":
                         output(
-                            f"  Blocked: {item['field'] or 'Unlabelled field'} [{item['reason']}]"
+                            blocked(
+                                f"  Blocked: {item['field'] or 'Unlabelled field'} [{item['reason']}]"
+                            )
                         )
         except PartialPlanStop as exc:
             steps, deferred = exc.steps, exc
             for reason in exc.reasons:
-                output(f"  Left for person: {reason}")
+                output(blocked(f"  Left for person: {reason}"))
         if not any(s.source == "resume" for s in steps):
             raise FormStop("Resume upload field not found; inspect the form manually")
         for step in steps:
             output(
-                f"  {step.field['label']}: {', '.join(step.values) if step.field['kind'] != 'file' else Path(step.values[0]).name} [{step.source}]"
+                ok(
+                    f"  {step.field['label']}: {', '.join(step.values) if step.field['kind'] != 'file' else Path(step.values[0]).name} [{step.source}]"
+                )
             )
             if step.source == "llm":
                 queue(step.field["label"], step.field["options"], step.field["required"])
@@ -233,7 +238,7 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                 applier.fill_one(step)
             for step in steps:
                 applier.verify_one(step)
-            output(str(deferred) + "; leave these questions for the person in the browser.")
+            output(warn(str(deferred) + "; leave these questions for the person in the browser."))
             raise deferred
         applier.fill(steps)
         screenshot(page, cfg, row, attempt, "filled", log)
@@ -268,8 +273,10 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
         if mode == "assisted":
             page.bring_to_front()
             output(
-                f"{row['id']}: Form filled and verified. Review it and press Submit in the "
-                f"browser; waiting up to {cfg.apply.submit_wait_minutes:g} minutes."
+                ok(
+                    f"{row['id']}: Form filled and verified. Review it and press Submit in the "
+                    f"browser; waiting up to {cfg.apply.submit_wait_minutes:g} minutes."
+                )
             )
             seconds = cfg.apply.submit_wait_minutes * 60
         else:
@@ -286,7 +293,9 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
 
             log("challenge_handoff", reason=str(exc))
             output(
-                "A CAPTCHA challenge appeared. Complete it in the browser; waiting for confirmation."
+                warn(
+                    "A CAPTCHA challenge appeared. Complete it in the browser; waiting for confirmation."
+                )
             )
             try:
                 notify(
@@ -312,7 +321,11 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
         except (PlaywrightError, OSError) as exc:
             log("screenshot_failed", stage="confirmation", error=type(exc).__name__)
         if any(step.source == "llm" for step in steps):
-            output("To save accepted LLM answers, use bio-jobs answers and enter them explicitly.")
+            output(
+                detail(
+                    "To save accepted LLM answers, use bio-jobs answers and enter them explicitly."
+                )
+            )
         return finish(conn, row, attempt, "submitted", proof)
     except FormStop as exc:
         # Challenges always require a person, including when they appear after Submit.
@@ -341,7 +354,11 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
             screenshot(page, cfg, row, attempt, "stopped", log)
     except (PlaywrightError, OSError) as exc:
         log("screenshot_failed", stage="stopped", error=type(exc).__name__)
-    output(f"{row['id']}: {status}: {reason}. Browser left for manual handling.")
+    output(
+        (blocked if status == "manual_required" else fail)(
+            f"{row['id']}: {status}: {reason}. Browser left for manual handling."
+        )
+    )
     return finish(conn, row, attempt, status, reason)
 
 
@@ -432,7 +449,7 @@ class Browser:
 
 
 def run(
-    cfg, conn, profile, rows, *, job=None, output=print, browser_factory=Browser, unattended=False
+    cfg, conn, profile, rows, *, job=None, output=log, browser_factory=Browser, unattended=False
 ):
     """Only the approved queue is consumed; discovery/preparation never imply approval."""
     if job and not any(r["id"] == job for r in rows):
@@ -475,7 +492,7 @@ def run(
             except ValueError as exc:
                 if job:
                     raise
-                output(str(exc))
+                output(warn(str(exc)))
                 continue
             employers.add(employer)
             if cfg.apply.mode == "manual":
@@ -523,11 +540,15 @@ def run(
                 event(conn, row["id"], None, "execution_rejected", reason=str(exc))
                 if job:
                     raise
-                output(str(exc))
+                output(fail(str(exc)))
                 break
             finally:
                 browser.close(leave_open=status != "submitted")
-            output(f"{row['id']}: {status}")
+            output(
+                {"submitted": ok, "manual_required": blocked}.get(status, fail)(
+                    f"{row['id']}: {status}"
+                )
+            )
             if status != "submitted":
                 # Preserve the current form for a person; do not open more application windows.
                 break
@@ -543,12 +564,16 @@ def run(
         done = [job_id for job_id, state in states.items() if state == "submitted"]
         unfinished = {job_id: state for job_id, state in states.items() if state != "submitted"}
         output(
-            f"Interrupted apply: confirmed {done}; unfinished {unfinished}; "
-            f"exit code {stop.exit_code()}. Reconcile uncertain submissions manually."
+            warn(
+                f"Interrupted apply: confirmed {done}; unfinished {unfinished}; "
+                f"exit code {stop.exit_code()}. Reconcile uncertain submissions manually."
+            )
         )
         raise
 
     output(
-        f"Apply pass: {len(outcomes)} attempted, {outcomes.count('submitted')} confirmed submitted."
+        (ok if outcomes.count("submitted") == len(outcomes) else warn)(
+            f"Apply pass: {len(outcomes)} attempted, {outcomes.count('submitted')} confirmed submitted."
+        )
     )
     return outcomes

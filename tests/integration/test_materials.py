@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rich.console import Console
 
 from app import answers, applications, cli, materials, resume
 from app.candidate.profile import Fact, import_profile
@@ -115,7 +114,7 @@ def test_batched_letters_threshold_cache_version_and_diff(preparation, conn, mon
     assert Path(first["path"]).read_text() == first["content"]
 
 
-def test_rewrite_once_then_persist_visible_warnings(preparation, conn, monkeypatch):
+def test_rewrite_once_then_persist_visible_warnings(console_output, preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     calls = []
     mock_letters(monkeypatch, calls, bad=True)
@@ -128,7 +127,7 @@ def test_rewrite_once_then_persist_visible_warnings(preparation, conn, monkeypat
         and "PhD" in item["warnings"]
     )
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output))
+    console_output(output, width=80)
     cli._show_materials(conn, rows[0])
     assert "WARNING:" in output.getvalue() and "999" in output.getvalue()
 
@@ -387,11 +386,13 @@ def test_ats_detects_missing_contact_and_section_order(tmp_path, monkeypatch):
     assert len(issues) == 3
 
 
-def test_preparation_commands_and_state_visibility(preparation, conn, sources, monkeypatch):
+def test_preparation_commands_and_state_visibility(
+    console_output, preparation, conn, sources, monkeypatch
+):
     cfg, _profile, rows = preparation
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     row = rows[0]
     from app.store import override_score
 
@@ -405,7 +406,9 @@ def test_preparation_commands_and_state_visibility(preparation, conn, sources, m
     assert "manual_required" in output.getvalue() and "Apply mode: manual" in output.getvalue()
 
 
-def test_review_browser_mode_approval_and_submission_keys(preparation, conn, monkeypatch):
+def test_review_browser_mode_approval_and_submission_keys(
+    console_output, preparation, conn, monkeypatch
+):
     cfg, profile, rows = preparation
     row = rows[0]
     cfg.apply.mode = "auto"
@@ -417,7 +420,7 @@ def test_review_browser_mode_approval_and_submission_keys(preparation, conn, mon
     opened = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output))
+    console_output(output, width=80)
     cli._review(conn, [row], cfg, profile)
     assert opened == []
     assert f"bio-jobs apply {row['id']}" in output.getvalue()
@@ -562,7 +565,9 @@ def test_lexical_check_prose_and_fabrications():
 
 
 @pytest.mark.parametrize("response,approved", [("no", False), ("approve", True)])
-def test_review_warning_confirmation(preparation, conn, monkeypatch, response, approved):
+def test_review_warning_confirmation(
+    console_output, preparation, conn, monkeypatch, response, approved
+):
     cfg, profile, rows = preparation
     row = rows[0]
     cfg.apply.mode = "auto"
@@ -573,13 +578,15 @@ def test_review_warning_confirmation(preparation, conn, monkeypatch, response, a
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     monkeypatch.setattr("builtins.input", lambda _: response)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output))
+    console_output(output, width=80)
     cli._review(conn, [row], cfg, profile)
     assert "letter warnings:" in output.getvalue()
     assert bool(conn.execute("SELECT 1 FROM application_approvals").fetchone()) is approved
 
 
-def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monkeypatch):
+def test_review_provenance_is_readable_and_flags_missing(
+    console_output, preparation, conn, monkeypatch
+):
     cfg, profile, rows = preparation
     row = rows[0]
     materials.save_version(
@@ -592,7 +599,7 @@ def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monk
         provenance={"claims": [{"text": "Claim.", "fact_ids": [0, 999]}]},
     )
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     cli._show_materials(conn, row, profile)
     text = output.getvalue()
     assert "Claim: Claim." in text
@@ -600,12 +607,12 @@ def test_review_provenance_is_readable_and_flags_missing(preparation, conn, monk
     assert "cited fact 999 no longer exists" in text
 
 
-def test_score_gate_and_external_import(preparation, conn, monkeypatch):
+def test_score_gate_and_external_import(console_output, preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     row = rows[0]
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     assert cli.main(["resume", str(row["id"])]) == 1
     assert "unscored" in output.getvalue() and "bio-jobs analyze" in output.getvalue()
     from app.store import override_score
@@ -630,7 +637,7 @@ def test_hours_only_unattended(preparation, conn):
         applications.check_gates(cfg, conn, rows[0], now=now, unattended=True)
 
 
-def test_assisted_review_offers_fill_after_approval(preparation, conn, monkeypatch):
+def test_assisted_review_offers_fill_after_approval(console_output, preparation, conn, monkeypatch):
     from app import autopilot
 
     cfg, profile, rows = preparation
@@ -643,7 +650,7 @@ def test_assisted_review_offers_fill_after_approval(preparation, conn, monkeypat
     called = []
     monkeypatch.setattr(autopilot, "run", lambda *args, **kwargs: called.append(kwargs["job"]))
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     cli._review(conn, [row], cfg, profile)
     assert called == [row["id"]]
     assert "you review and press Submit yourself" in output.getvalue()
@@ -888,7 +895,9 @@ def test_prepare_never_replaces_edited_files(preparation, conn, monkeypatch):
     assert Path(letter["path"]).read_text() == "My own letter."
 
 
-def test_prepare_command_non_interactive_lists_questions(preparation, conn, monkeypatch):
+def test_prepare_command_non_interactive_lists_questions(
+    console_output, preparation, conn, monkeypatch
+):
     from app.store import override_score
 
     cfg, _profile, rows = preparation
@@ -901,7 +910,7 @@ def test_prepare_command_non_interactive_lists_questions(preparation, conn, monk
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Unexpected prompt"))
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     assert cli.main(["prepare", str(row["id"])]) == 0
     text = output.getvalue()
     assert "Prepared: letter, resume, resume PDF, answers" in text
@@ -911,7 +920,7 @@ def test_prepare_command_non_interactive_lists_questions(preparation, conn, monk
         assert materials.latest(conn, row["id"], kind)
 
 
-def test_prepare_command_asks_only_unanswered(preparation, conn, monkeypatch):
+def test_prepare_command_asks_only_unanswered(console_output, preparation, conn, monkeypatch):
     from app.store import override_score
 
     cfg, _profile, rows = preparation
@@ -926,7 +935,7 @@ def test_prepare_command_asks_only_unanswered(preparation, conn, monkeypatch):
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     asked = []
     monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "One month")
-    monkeypatch.setattr(cli, "console", Console(file=io.StringIO(), width=200))
+    console_output(io.StringIO(), width=200)
     assert cli.main(["prepare", str(row["id"])]) == 0
     assert len(asked) == 1
     draft_items = yaml.safe_load(materials.latest(conn, row["id"], "answers")["content"])["items"]
@@ -935,7 +944,9 @@ def test_prepare_command_asks_only_unanswered(preparation, conn, monkeypatch):
 
 
 @pytest.mark.parametrize("response,approved", [("approve", True), ("no", False)])
-def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, response, approved):
+def test_review_approve_prepares_then_confirms(
+    console_output, preparation, conn, monkeypatch, response, approved
+):
     cfg, profile, rows = preparation
     row = rows[0]
     cfg.apply.mode = "auto"
@@ -948,7 +959,7 @@ def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, r
     prompts = []
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or response)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     cli._review(conn, [row], cfg, profile)
     text = output.getvalue()
     assert "Prepare letter first" not in text
@@ -962,7 +973,7 @@ def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, r
 
 
 def test_review_approve_with_current_materials_needs_no_extra_prompt(
-    preparation, conn, monkeypatch
+    console_output, preparation, conn, monkeypatch
 ):
     cfg, profile, rows = preparation
     row = rows[0]
@@ -973,13 +984,15 @@ def test_review_approve_with_current_materials_needs_no_extra_prompt(
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Unexpected prompt"))
-    monkeypatch.setattr(cli, "console", Console(file=io.StringIO(), width=200))
+    console_output(io.StringIO(), width=200)
     cli._review(conn, [row], cfg, profile)
     assert row["application_state"] == "approved"
     assert versions(conn, row) == before
 
 
-def test_review_approve_keeps_import_message_for_edited_file(preparation, conn, monkeypatch):
+def test_review_approve_keeps_import_message_for_edited_file(
+    console_output, preparation, conn, monkeypatch
+):
     cfg, profile, rows = preparation
     row = rows[0]
     ready(cfg, conn, profile, row, monkeypatch)
@@ -990,7 +1003,7 @@ def test_review_approve_keeps_import_message_for_edited_file(preparation, conn, 
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     monkeypatch.setattr("builtins.input", lambda _: "approve")
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     cli._review(conn, [row], cfg, profile)
     text = output.getvalue()
     assert f"run bio-jobs import {row['id']} --kind letter" in text

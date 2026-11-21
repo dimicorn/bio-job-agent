@@ -8,14 +8,13 @@ import sys
 import httpx
 import yaml
 from dotenv import set_key
-from rich.console import Console
 
 from app.candidate.profile import import_profile, load_profile
+from app.console import console
 from app.db import connect, migrate
 from app.llm import check, fallback_cfg
 from app.settings import ROOT, Analyst, Apply, Settings
 
-console = Console(markup=False)
 # Scoring choices shared by primary and fallback; fallback_settings must never override them.
 SHARED = (
     "preferences",

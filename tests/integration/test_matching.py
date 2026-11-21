@@ -6,7 +6,6 @@ import sys
 import pytest
 import yaml
 from pydantic import ValidationError
-from rich.console import Console
 
 from app import analyst, cli, resume
 from app.candidate.profile import Fact, load_profile
@@ -265,11 +264,11 @@ def test_actual_command_backend_scoring_is_cached(matching, conn, sources, tmp_p
     assert events[0]["backend"] == "command" and events[0]["status"] == "ok"
 
 
-def test_review_override_key_persists(matching, conn, sources, monkeypatch):
+def test_review_override_key_persists(console_output, matching, conn, sources, monkeypatch):
     cfg, profile = matching
     rows = analyst.attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources))[:1]
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(cli, "console", Console(file=io.StringIO()))
+    console_output(io.StringIO(), width=80)
     keys = iter("vq")
     answers = iter(["93", "apply", "Verified fit manually"])
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
@@ -278,7 +277,9 @@ def test_review_override_key_persists(matching, conn, sources, monkeypatch):
     assert conn.execute("SELECT score FROM score_overrides").fetchone()[0] == 93
 
 
-def test_scoring_cli_and_stale_results(matching, conn, sources, tmp_path, monkeypatch):
+def test_scoring_cli_and_stale_results(
+    console_output, matching, conn, sources, tmp_path, monkeypatch
+):
     cfg, profile = matching
     # CLI uses a separate connection to the same temporary database.
     cfg.database_path = tmp_path / "jobs.sqlite3"
@@ -288,7 +289,7 @@ def test_scoring_cli_and_stale_results(matching, conn, sources, tmp_path, monkey
     cfg.config_path.write_text(yaml.safe_dump({"analyst": cfg.analyst.model_dump()}))
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output, width=200))
+    console_output(output, width=200)
     fake_answers(monkeypatch, [])
     assert cli.main(["analyze"]) == 0
     assert cli.main(["list"]) == 0
@@ -306,7 +307,7 @@ def test_scoring_cli_and_stale_results(matching, conn, sources, tmp_path, monkey
 
 
 def test_extract_profile_cli_needs_review_and_protects_existing_output(
-    matching, tmp_path, monkeypatch
+    console_output, matching, tmp_path, monkeypatch
 ):
     cfg, profile = matching
     cfg.database_path = tmp_path / "jobs.sqlite3"
@@ -316,7 +317,7 @@ def test_extract_profile_cli_needs_review_and_protects_existing_output(
     cfg.config_path.write_text(yaml.safe_dump({"analyst": cfg.analyst.model_dump()}))
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
-    monkeypatch.setattr(cli, "console", Console(file=output))
+    console_output(output, width=80)
     calls = []
     unsupported = profile.facts[0].model_copy(update={"evidence": "invented evidence"})
     monkeypatch.setattr(

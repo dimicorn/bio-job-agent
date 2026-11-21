@@ -330,6 +330,7 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
         batches,
         cfg.analyst.parallel,
         lambda executor, batch: executor.submit(write_batch, cfg, profile, batch, instruction),
+        name="letters",
     ):
         try:
             results = future.result()

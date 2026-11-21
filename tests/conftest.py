@@ -57,3 +57,19 @@ def transport():
         return httpx.Response(200, json=json.loads((FIXTURES / f"{source}.json").read_text()))
 
     return httpx.MockTransport(handler)
+
+
+@pytest.fixture
+def console_output(monkeypatch):
+    """Redirect the shared console (app.console) to a buffer for this test."""
+    import io
+
+    from app.console import console
+
+    def capture(file=None, width=80):
+        file = file if file is not None else io.StringIO()
+        monkeypatch.setattr(console, "_file", file)
+        monkeypatch.setattr(console, "_width", width)
+        return file
+
+    return capture

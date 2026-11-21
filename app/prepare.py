@@ -12,6 +12,7 @@ import yaml
 
 from app import answers, materials
 from app.candidate.profile import import_profile
+from app.console import log, warn
 from app.resume import digest, require_reviewed
 
 TERMINAL = ("submitted", "unknown_result", "withdrawn")
@@ -51,7 +52,7 @@ def pdf_current(item):
     return path.exists() and item["pdf_hash"] == digest(path.read_bytes().hex())
 
 
-def prepare_materials(cfg, conn, profile, row, *, output=print):
+def prepare_materials(cfg, conn, profile, row, *, output=log):
     """Create a missing or stale letter, resume and checked resume PDF."""
     require_reviewed(cfg, profile)
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
@@ -94,13 +95,13 @@ def prepare_materials(cfg, conn, profile, row, *, output=print):
             _, issues = materials.build_resume_pdf(cfg, conn, profile, row)
             result.created.append("resume PDF")
             if issues:
-                output("ATS check found problems; they are listed with the resume below.")
+                output(warn("ATS check found problems; they are listed with the resume below."))
         except (ValueError, RuntimeError, OSError) as exc:
             result.problems.append(f"Resume PDF failed: {exc}")
     return result
 
 
-def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print):
+def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=log):
     """Ask only what answers.yaml cannot answer, then refresh the draft if it is out of date."""
     version = import_profile(conn, profile)
     found, item = status(conn, row, "answers", version)
