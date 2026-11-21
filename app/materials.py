@@ -358,37 +358,6 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
     return done
 
 
-def tailored_resume(cfg, conn, profile, row):
-    """Tailor order, never qualifications: copy reviewed facts verbatim with fact IDs."""
-    require_name(profile)
-    require_reviewed(cfg, profile)
-    # Source order is the safe default: role boundaries in arbitrary Markdown cannot
-    # be inferred reliably enough to move bullets without risking chronology.
-    source = resume_text(cfg)
-    return save_version(
-        cfg,
-        conn,
-        profile,
-        row,
-        "resume",
-        source,
-        provenance={"source": "resume.md", "source_hash": digest(source)},
-    )
-
-
-def resume_source_diff(cfg, content):
-    source = resume_text(cfg)
-    diff = "".join(
-        difflib.unified_diff(
-            source.splitlines(keepends=True),
-            content.splitlines(keepends=True),
-            fromfile="resume.md",
-            tofile="prepared resume",
-        )
-    )
-    return diff or "No differences from resume.md."
-
-
 def edit_letter(cfg, conn, profile, row):
     old = latest(conn, row["id"], "letter")
     editor = shlex.split(os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano")
@@ -437,7 +406,7 @@ def edit_letter(cfg, conn, profile, row):
 
 def material_diff(conn, job_id, kind=None):
     chunks = []
-    for name in [kind] if kind else ["letter", "resume", "answers"]:
+    for name in [kind] if kind else ["letter", "answers"]:
         rows = conn.execute(
             "SELECT * FROM material_versions WHERE job_id=? AND kind=? ORDER BY id DESC LIMIT 2",
             (job_id, name),
@@ -501,75 +470,6 @@ def render_pdf(md_text, out):
         raise RuntimeError(
             "Chromium PDF failed; run bio-jobs doctor and uv run playwright install chromium"
         ) from exc
-
-
-def ats_check(pdf, md_text, name):
-    from pdfminer.high_level import extract_text
-
-    flat = re.sub(r"\s+", " ", extract_text(str(pdf)))
-    issues = []
-    if name not in flat:
-        issues.append(f"Name does not extract: {name}")
-    emails = re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", md_text)
-    if not emails:
-        issues.append("Resume has no email")
-    for email in emails:
-        if email not in flat:
-            issues.append(f"Email does not extract: {email}")
-    sections = re.findall(r"^##\s+(.+)$", md_text, re.MULTILINE)
-    if not sections:
-        issues.append("Resume has no sections")
-    position = 0
-    for section in sections:
-        hit = flat.casefold().find(section.casefold(), position)
-        if hit < 0:
-            issues.append(f"Section missing or out of order: {section}")
-        else:
-            position = hit + len(section)
-    if re.search(r"[\ufb00-\ufb06]", flat):
-        issues.append("PDF contains ATS-hostile ligatures")
-    return issues
-
-
-def build_resume_pdf(cfg, conn, profile, row):
-    require_name(profile)
-    require_reviewed(cfg, profile)
-    current = latest(conn, row["id"], "resume")
-    if (
-        not current
-        or current["profile_version"] != import_profile(conn, profile)
-        or current["job_hash"] != job_hash(row)
-    ):
-        current = tailored_resume(cfg, conn, profile, row)
-    path = Path(current["path"])
-    text = path.read_text(encoding="utf-8")
-    if text != current["content"]:
-        known = resume_text(cfg) + "\n" + "\n".join(f.fact for f in profile.facts)
-        warnings = unsupported(text, known)
-        # Edits remain user-authored; retain complete provenance and a new immutable snapshot.
-        current = save_version(
-            cfg,
-            conn,
-            profile,
-            row,
-            "resume",
-            text,
-            warnings,
-            {"source": "user edit", "previous_version": current["id"]},
-        )
-    if not browser_available():
-        raise ValueError("Chromium missing; run uv run playwright install chromium")
-    out = Path(current["path"]).with_suffix(".pdf")
-    render_pdf(current["content"], out)
-    heading = re.search(r"(?m)^#\s+(.+?)\s*$", current["content"])
-    name = heading.group(1) if heading else profile.name
-    issues = ats_check(out, current["content"], name)
-    conn.execute(
-        "UPDATE material_versions SET pdf_path=?,ats_warnings=?,pdf_hash=? WHERE id=?",
-        (str(out), json.dumps(issues), digest(out.read_bytes().hex()), current["id"]),
-    )
-    conn.commit()
-    return out, issues
 
 
 def build_letter_pdf(cfg, conn, profile, row):

@@ -22,6 +22,7 @@ def configured(tmp_path, monkeypatch):
         database_path=tmp_path / "jobs.sqlite3",
         candidate_path=tmp_path / "candidate.yaml",
         resume_path=tmp_path / "resume.md",
+        resume_pdf_path=tmp_path / "resume.pdf",
         config_path=tmp_path / "config.yaml",
         env_path=tmp_path / ".env",
         llm_state_dir=tmp_path,
@@ -334,7 +335,7 @@ def test_fallback_overrides_keep_shared_scoring_settings():
     assert selected.preferences == "London only" and selected.base_url is None
 
 
-def test_doctor_pending_migrations_warn_and_next_steps(configured, monkeypatch):
+def test_doctor_pending_migrations_warn_and_next_steps(configured, monkeypatch, make_pdf):
     from app.db import MIGRATIONS, connect, migrate
     from app.resume import digest
 
@@ -349,7 +350,9 @@ def test_doctor_pending_migrations_warn_and_next_steps(configured, monkeypatch):
     rows, step = doctor.collect(cfg)
     statuses = {name: (status, detail) for name, status, detail in rows}
     assert statuses["Database"][0] == "WARN" and "automatically" in statuses["Database"][1]
-    assert step.startswith("Fill resume.md")
+    assert step == f"Save your resume PDF at {cfg.resume_pdf_path}"
+    make_pdf(cfg.resume_pdf_path, [("Jane Doe", 18, 40, 50), ("Principal Scientist", 10, 40, 70)])
+    assert doctor.collect(cfg)[1] == "uv run bio-jobs resume-from-pdf"
     cfg.resume_path.write_text("Jane Doe\nPrincipal Scientist")
     assert doctor.collect(cfg)[1] == "uv run bio-jobs extract-profile --force"
     profile = yaml.safe_load(cfg.candidate_path.read_text())
@@ -389,3 +392,77 @@ def test_setup_shows_current_choices_and_offers_extraction(configured, monkeypat
     assert calls == [(cfg.candidate_path, True)]
     assert "sends the resume to command" in prompts[-1]
     assert "Next step:" in text
+
+
+def synthetic_cv(make_pdf, path):
+    return make_pdf(
+        path,
+        [
+            ("Jane Doe", 18, 40, 50),
+            ("jane@example.org | London", 10, 40, 70),
+            ("Experience", 13, 40, 100),
+            ("Example Bio Ltd", 10, 40, 118),
+            ("2019 - present", 10, 480, 118),
+            ("Principal Scientist", 10, 40, 131),
+            ("• Led assay development for", 10, 50, 146),
+            ("oncology programmes.", 10, 58, 158),
+        ],
+    )
+
+
+def test_setup_fills_resume_md_from_pdf_and_skips_extraction(configured, monkeypatch, make_pdf):
+    cfg, output = configured
+    synthetic_cv(make_pdf, cfg.resume_pdf_path)
+    before = cfg.resume_pdf_path.read_bytes()
+    monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(wizard, "check", lambda *a, **kw: None)
+    answers = iter(["n", "n", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    monkeypatch.setattr(
+        "app.resume.extract_to_file", lambda *a, **k: pytest.fail("Review resume.md first")
+    )
+    cfg.config_path.write_text(cfg.config_path.read_text() + "apply:\n  mode: manual\n")
+    assert wizard.setup(cfg)
+    text = cfg.resume_path.read_text()
+    assert text.startswith("# Jane Doe\n") and "## Experience" in text
+    assert "- Led assay development for oncology programmes." in text
+    assert cfg.resume_pdf_path.read_bytes() == before
+    assert "extract-profile --force" in output.getvalue()
+
+
+def test_setup_asks_before_replacing_a_filled_resume(configured, monkeypatch, make_pdf):
+    cfg, _output = configured
+    synthetic_cv(make_pdf, cfg.resume_pdf_path)
+    cfg.resume_path.write_text("Jane Doe\nMy hand-written resume")
+    cfg.config_path.write_text(cfg.config_path.read_text() + "apply:\n  mode: manual\n")
+    monkeypatch.setattr(wizard.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(wizard, "check", lambda *a, **kw: None)
+    prompts = []
+    answers = iter(["n"] * 5)
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or next(answers))
+    wizard.setup(cfg)
+    assert any("Replace" in prompt for prompt in prompts)
+    assert cfg.resume_path.read_text() == "Jane Doe\nMy hand-written resume"
+
+
+def test_resume_from_pdf_command_never_overwrites_without_force(configured, make_pdf):
+    cfg, output = configured
+    synthetic_cv(make_pdf, cfg.resume_pdf_path)
+    assert cli.main(["resume-from-pdf"]) == 0
+    assert cfg.resume_path.read_text().startswith("# Jane Doe")
+    assert "extract-profile --force" in output.getvalue()
+    cfg.resume_path.write_text("Edited by Jane")
+    assert cli.main(["resume-from-pdf"]) == 1
+    assert "use --force" in output.getvalue()
+    assert cfg.resume_path.read_text() == "Edited by Jane"
+    assert cli.main(["resume-from-pdf", "--force"]) == 0
+    assert "## Experience" in cfg.resume_path.read_text()
+
+
+def test_resume_command_reports_missing_and_image_only_pdf(configured, make_pdf):
+    cfg, output = configured
+    assert cli.main(["resume"]) == 1
+    assert "Resume PDF missing" in output.getvalue()
+    make_pdf(cfg.resume_pdf_path, [])
+    assert cli.main(["resume"]) == 1
+    assert "no extractable text" in output.getvalue()

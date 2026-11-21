@@ -1,5 +1,6 @@
 # Run ./setup.sh to create config.yaml and save credentials in gitignored .env.
 resume: resume.md                    # Relative to this config file; local and gitignored
+resume_pdf: resume.pdf               # Your resume PDF, attached to applications unchanged
 analyst:
   # Optional letter guidance; default length is 150–250 words.
   letter_style: ""

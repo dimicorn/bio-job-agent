@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     database_path: Path = ROOT / "data/jobs.sqlite3"
     candidate_path: Path = ROOT / "config/candidate.example.yaml"
     resume_path: Path = ROOT / "resume.md"
+    resume_pdf_path: Path = ROOT / "resume.pdf"
     sources_path: Path = ROOT / "config/sources.yaml"
     http_timeout: float = 20
     user_agent: str = "BioJobAgent/0.1 (local single-user job discovery)"
@@ -128,6 +129,9 @@ class Settings(BaseSettings):
         resume_path = Path(data.get("resume", self.resume_path))
         if not resume_path.is_absolute():
             resume_path = path.parent / resume_path
+        resume_pdf_path = Path(data.get("resume_pdf", self.resume_pdf_path))
+        if not resume_pdf_path.is_absolute():
+            resume_pdf_path = path.parent / resume_pdf_path
         watch = Watch.model_validate(data.get("watch", {}))
         if not watch.digest_dir.is_absolute():
             watch.digest_dir = path.parent / watch.digest_dir
@@ -140,6 +144,7 @@ class Settings(BaseSettings):
             update={
                 "analyst": analyst,
                 "resume_path": resume_path,
+                "resume_pdf_path": resume_pdf_path,
                 "apply": apply,
                 "watch": watch,
                 "search": Search.model_validate(data.get("search", {})),

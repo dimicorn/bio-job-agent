@@ -6,10 +6,10 @@ from pathlib import Path
 
 import yaml
 
-from app import answers, materials
+from app import answers, materials, resume_pdf
 from app.candidate.profile import import_profile
 from app.pipeline.normalize import key
-from app.resume import digest, require_reviewed
+from app.resume import digest, require_reviewed, resume_text
 
 
 def company_cooldown(conn, employer, days, *, now=None):
@@ -152,7 +152,7 @@ def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
     require_reviewed(cfg, profile)
     version = import_profile(conn, profile)
     paths, ids, warnings = [], {}, {}
-    for kind in ("letter", "resume", "answers"):
+    for kind in ("letter", "answers"):
         current = materials.latest(conn, row["id"], kind)
         if not current:
             raise ValueError(f"Prepare {kind} first")
@@ -167,16 +167,11 @@ def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
             )
         ids[kind] = current["id"]
         paths.append(str(path))
-        if kind == "resume":
-            if not current["pdf_path"] or not Path(current["pdf_path"]).exists():
-                raise ValueError("Build the resume PDF first")
-            if current["pdf_hash"] != digest(Path(current["pdf_path"]).read_bytes().hex()):
-                raise ValueError("Resume PDF changed after ATS check; rebuild it")
-            if current["ats_warnings"] is None:
-                raise ValueError("Resume PDF has not been ATS checked")
-            if found := json.loads(current["ats_warnings"]):
-                warnings["ATS"] = found
-            paths.append(current["pdf_path"])
+    # The supplied resume PDF is attached as it is at fill time; it is checked, not pinned.
+    pdf = resume_pdf.check(cfg, profile, resume_text(cfg))
+    if not pdf.ok:
+        raise ValueError("Resume PDF: " + "; ".join(pdf.problems))
+    paths.append(str(pdf.path))
     current_answers = materials.latest(conn, row["id"], "answers")
     if yaml.safe_load(current_answers["content"]) != {"items": answers.plan(cfg, conn, row)}:
         raise ValueError(

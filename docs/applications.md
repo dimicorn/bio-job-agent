@@ -13,9 +13,9 @@ uv run bio-jobs prepare 42              # everything missing or stale, then the 
 uv run bio-jobs review                  # or simply press a on the job: it prepares first
 ```
 
-`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its
-ATS check and the screening draft, but only for pieces that are missing or stale; current
-materials stay as they are, with no new versions. It then shows the letter with each claim
+`prepare` (and `a` in review) writes the cover letter and the screening draft, but only
+for pieces that are missing or stale; current materials stay as they are, with no new
+versions. It also checks your resume PDF (see below); it never generates a resume. It then shows the letter with each claim
 and its cited facts, plus any warnings, and asks only the screening questions the answer
 bank cannot answer. Without an interactive terminal it prepares everything it can, lists
 the unanswered questions and prints the command to run in a terminal. A material file you
@@ -26,23 +26,41 @@ The single commands remain for redoing one piece:
 ```bash
 uv run bio-jobs letters                 # batches jobs at analyst.min_score
 uv run bio-jobs letters --job 42 --force # keep a new version of an existing letter
-uv run bio-jobs resume 42               # tailored, editable Markdown
-uv run bio-jobs pdf 42                  # Chromium PDF plus pdfminer ATS text check
+uv run bio-jobs resume                  # check the resume PDF applications attach
+uv run bio-jobs resume-from-pdf         # write resume.md from the PDF's text (--force replaces)
 uv run bio-jobs letter-pdf 42           # optional PDF of the saved cover letter
-uv run bio-jobs diff 42 --source        # compare the current resume file to resume.md
 uv run bio-jobs answers --job 42 --show # prepare screening draft, including an empty draft
 uv run bio-jobs review --status all
 uv run bio-jobs diff 42                 # latest two versions, all material types
 ```
 
-Resume preparation preserves the source Markdown and its chronological roles, dates,
-contact details and education exactly. It does not reorder ambiguous Markdown blocks or
-invent experience. The command shows a diff against `resume.md`; `diff 42 --source`
-compares the current editable file, including unsaved edits. Run `pdf 42` to capture
-edits in a new version and rebuild it. The ATS check verifies the name, email, section
-order and text ligatures. Missing contact details require your edit.
-`./setup.sh` installs Chromium; `doctor` reports when it is missing. Install it manually
-with `uv run playwright install chromium` if needed.
+### Your resume PDF
+
+Applications upload your own resume PDF exactly as it is: `resume.pdf` in the repository
+root by default (gitignored), or `resume_pdf:` in config.yaml, relative to that file. It
+is never rendered, rewritten or tailored, and no per-job copy is kept. Approval covers the
+cover letter and the screening answers only, so a revised PDF needs no new approval: the
+next fill attaches whatever file is there.
+
+A light check runs at `prepare`, at approval and again just before a form is filled: the
+file exists, is a PDF, and its extractable text contains your profile name and email (the
+profile `email`, or the email in `resume.md`). A missing file, a scan or image-only PDF, or
+text without your name or email is a blocker with the fix, never an acknowledgeable
+warning; a failing check at fill time stops that job for you. `uv run bio-jobs resume`
+runs the same check on demand.
+
+`resume.md` is the text the profile, letters and screening answers are built from. Setup
+fills it from the PDF's text when `resume.md` is missing or still the example, and asks
+before replacing a resume you already filled; `resume-from-pdf` reruns the extraction
+(`--force` to replace). Extraction keeps your wording and recovers the layout as Markdown:
+`#` name, contact line, `##` section headings, `###` employer, role and date lines,
+bullets and numbered publications. Bullets drawn as shapes, columns and tables can be
+misread, so compare `resume.md` with the PDF, correct it, then run
+`uv run bio-jobs extract-profile --force` and review the profile. Changing `resume.md`
+requires extraction and review again, as before.
+
+`./setup.sh` installs Chromium for letter PDFs and browser applications; `doctor` reports
+when it is missing. Install it manually with `uv run playwright install chromium`.
 
 Letters are written in the vacancy's language through the configured LLM. Set optional
 `analyst.letter_style` and `analyst.letter_length` in config.yaml to guide the draft;
@@ -56,18 +74,18 @@ the draft is saved with visible review warnings. These lexical checks are conser
 read the letter and its cited facts before approving. They do not prove the meaning of
 a paraphrase. Review each warning and correct or rewrite any unsupported claim. Warnings on your own edits remain visible as advisories.
 
-Every letter, resume and screening draft has a database snapshot and an editable file
-under `materials/<job>/`, linked to the job content and reviewed profile version. PDF
-builds also record an integrity hash and ATS warnings. Changed profile/job inputs make
+Every letter and screening draft has a database snapshot and an editable file under
+`materials/<job>/`, linked to the job content and reviewed profile version. Letter PDFs
+also record an integrity hash. Changed profile/job inputs make
 old materials stale. New edits or generations return the application to `awaiting_review`.
 `diff 42 --kind letter` shows a readable changelog between letter versions. The database
 retains earlier content even if a material file is edited directly.
 
 In review, the letter display shows each cited claim with the reviewed fact and its verbatim CV evidence. Compare the sentence against those excerpts; missing cited facts are flagged. A user-edited letter has no generated claim citations, so verify its claims directly against your CV. The `v` action overrides the score; provenance is displayed with the letter in the review screen.
 
-Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `resume` / `answers`), inspect the diff and type `import`. This creates a new version and requires review; a new resume needs a fresh PDF. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.
+Externally edited material must be imported before approval: run `bio-jobs import <job> --kind letter` (or `answers`), inspect the diff and type `import`. This creates a new version and requires review. Answers must agree with the answer bank: update the bank and regenerate the snapshot if they differ. Explicit preparation requests respect score thresholds; run `bio-jobs analyze` or use `review --all-scores` and `v` to record an override with a reason.
 
-Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or tailored CVs or filling forms.
+Profile extraction leaves a missing or unsupported header name empty and lists it as an uncertainty. Review the extracted name and evidence along with all facts. An existing person-edited name is retained. Doctor warns about an empty or example name; set your name in the candidate profile before generating letters or filling forms.
 
 ## Screening answers bank
 
@@ -103,12 +121,12 @@ Additional keys are:
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |
-| `a` | Prepare any missing or stale materials (as `prepare` does), show anything new for confirmation, then approve and pin the current letter, CV PDF and answer versions. Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
+| `a` | Prepare any missing or stale materials (as `prepare` does), show anything new for confirmation, then approve and pin the current letter and answer versions (the resume PDF is checked, not pinned). Manual mode opens the apply link; assisted mode offers **f** to fill immediately, leaving Submit to you; auto mode prints the `apply` command. |
 | `t` | Record `submitted` only after you type `submitted` to confirm you completed the application yourself. |
 | `m` | Set a preparation state, including `blocked`, `manual_required` or `withdrawn`. |
 
-Approval requires current, unchanged letter/resume/answer files, a checked resume PDF,
-explicit acknowledgement of any material or ATS warnings. When `a` had to prepare anything,
+Approval requires current, unchanged letter and answer files, a resume PDF that passes its
+check, and explicit acknowledgement of any material warnings. When `a` had to prepare anything,
 review shows the new materials and asks you to type `approve` before recording approval.
 Review lists warnings by material; type `approve` to accept them or anything else to cancel. The approval and application event record the acknowledged warnings. Edited material files, cooldowns, and score and limit gates remain blockers; missing or stale materials are prepared first. It only marks the
 job approved; browser execution is a separate `apply` command. Saving a review decision
@@ -163,10 +181,10 @@ Changed or unsupported widgets stop for manual handling. No live employer submis
 
 Greenhouse questions are fetched from its public job-board API with robots checks and
 request pacing, then matched to the embedded application form. A mismatch stops the job.
-The shared planner uses profile contacts and links, the approved CV and cover letter, then
+The shared planner uses profile contacts and links, your resume PDF and the approved cover letter, then
 employer-specific or global `answers.yaml` entries. Optional single-option consent can be
 enabled with `auto_consent`. It then asks the configured LLM once for remaining questions,
-using the approved CV, reviewed facts and stored answers; unsupported questions are queued.
+using `resume.md`, reviewed facts and stored answers; unsupported questions are queued.
 Options must match the form. Visa, work authorization, legal declarations, demographics and
 assessments are never answered by the LLM: only stored answers may fill them, and optional
 demographic questions remain blank.
@@ -212,8 +230,8 @@ opens a fresh tab, preserving previous handoffs. Scheduling and notifications ar
 
 ## Material tests
 
-Offline material tests mock the LLM. A real PDF test runs when Chromium is available and
-skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no private data):
+Offline material tests mock the LLM and use small synthetic text PDFs for the resume. A
+real letter PDF test runs when Chromium is available and skips cleanly otherwise. To spend an opt-in request on a synthetic letter (no private data):
 
 ```bash
 BIO_LIVE_LETTER=1 uv run pytest tests/integration/test_materials.py -k live_synthetic_letter -m live --live -q -s
