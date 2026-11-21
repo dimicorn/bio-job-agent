@@ -11,7 +11,7 @@ from app import cli, doctor, wizard
 from app.llm import Ping
 from app.pipeline.discover import discover
 from app.settings import ROOT, Settings
-from app.store import list_jobs
+from app.store import list_jobs, review_job
 
 
 @pytest.fixture
@@ -89,11 +89,14 @@ def test_review_actions_persist_and_rejection_survives_refresh(
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     opened = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
-    keys = iter("ors")
+    keys = iter("osrq")  # s is no longer a review key: it is ignored
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     assert cli.main(["review", "--all-scores"]) == 0
     assert len(opened) == 1
     with connect(cfg.database_path) as conn:
+        rows = list_jobs(conn, profile, sources)
+        # A job saved before s was removed keeps its saved state.
+        review_job(conn, next(r["id"] for r in rows if r["review"] == "new"), "saved")
         rows = list_jobs(conn, profile, sources)
         assert sorted(r["review"] for r in rows) == ["rejected", "saved"]
         conn.execute("UPDATE sources SET next_allowed_at=NULL")

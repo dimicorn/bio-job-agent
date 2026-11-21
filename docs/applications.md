@@ -147,11 +147,21 @@ Screening draft snapshots retain the actual questions, selected answers and thei
 
 ## Review keys and approval
 
-Review keeps `o` open, `s` save, `r` reject, `l` later, `v` score override and `q` quit.
-Additional keys are:
+Each card ends with one short line: `a apply · r reject · l later · o open · ? more · q quit`
+(`a apply/fill` in assisted mode, `a apply/open` in manual mode). `?` prints the other keys
+valid for the job and returns to the same card; each key also works without opening `?`.
+`?` shows `i` description, `x` scoring, `v` score override and `m` state for every job;
+`c`, `e` and `w` once a letter exists; `d` once a material has two versions; `t` only while
+an application is waiting for you to finish it. There is no separate save key: `a` keeps the
+job, and jobs saved earlier keep their state and stay in the default queue.
+Secondary keys:
 
 | Key | Action |
 | --- | --- |
+| `i` | Show the job description. |
+| `x` | Show the full scoring explanation. |
+| `c` | Show the letter with its claims and cited facts. |
+| `v` | Override the score and recommendation with a reason. |
 | `e` | Edit the letter with `$VISUAL`, `$EDITOR`, or `nano`; editor arguments such as `code --wait` work. Saves a checked new version. |
 | `w` | Rewrite the letter with your instruction, preserving factual checks. |
 | `d` | Show the material diff. |

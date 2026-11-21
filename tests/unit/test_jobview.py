@@ -164,7 +164,8 @@ def test_review_card_is_short_and_hides_long_text(console_output, conn, monkeypa
     assert out.count("Right to work in the UK") == 1
     assert "+3 more (x: scoring details)" in out
     assert "candidate quote" not in out and "First paragraph" not in out
-    assert "i description" in out and "x scoring" in out and "c letter/claims" in out
+    assert "a apply · r reject · l later · o open · ? more · q quit" in out
+    assert "i description" not in out and "s save" not in out
 
 
 def test_review_keys_show_description_and_scoring(console_output, conn, monkeypatch):
@@ -177,3 +178,70 @@ def test_review_keys_show_description_and_scoring(console_output, conn, monkeypa
     assert "First paragraph of the job." in out
     assert "Must-have evidence" in out and "candidate: PhD; job: PhD required" in out
     assert "In resume: assay development" in out
+
+
+def test_review_question_mark_lists_secondary_keys_on_same_card(console_output, conn, monkeypatch):
+    output = console_output(io.StringIO(), width=100)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    keys = iter("?q")
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
+    cli._review(conn, [synthetic(1)])
+    out = output.getvalue()
+    assert "i description · x scoring · v override · m state" in out
+    # No letter yet: letter keys, diff and mark submitted are not offered.
+    for hidden in ("c letter", "e edit", "w rewrite", "d diff", "t mark", "s save"):
+        assert hidden not in out
+    assert out.count("? more") == 2  # the card's line is shown again after the list
+    assert "1/1" in out and out.count("1/1") == 1
+
+
+def _key_db(letters=0, answers=0, state=None):
+    import sqlite3
+
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE material_versions(job_id, kind)")
+    db.execute("CREATE TABLE applications(job_id, state)")
+    db.executemany(
+        "INSERT INTO material_versions VALUES (1, ?)",
+        [("letter",)] * letters + [("answers",)] * answers,
+    )
+    if state:
+        db.execute("INSERT INTO applications VALUES (1, ?)", (state,))
+    return db
+
+
+class _Cfg:
+    def __init__(self, mode):
+        self.apply = type("Apply", (), {"mode": mode})()
+
+
+@pytest.mark.parametrize(
+    ("mode", "label"),
+    [("assisted", "a apply/fill"), ("manual", "a apply/open"), ("auto", "a apply")],
+)
+def test_review_default_line_label_follows_apply_mode(mode, label):
+    primary, _ = cli._review_keys(_key_db(), {"id": 1}, _Cfg(mode))
+    assert primary == f"{label} · r reject · l later · o open · ? more · q quit"
+
+
+@pytest.mark.parametrize(
+    ("db", "mode", "shown", "hidden"),
+    [
+        ({}, "manual", [], ["c letter", "e edit", "w rewrite", "d diff", "t mark"]),
+        ({"letters": 1}, "manual", ["c letter", "e edit", "w rewrite"], ["d diff", "t mark"]),
+        ({"letters": 2}, "manual", ["d diff"], ["t mark"]),
+        ({"letters": 1, "state": "approved"}, "manual", ["t mark submitted"], ["d diff"]),
+        ({"letters": 1, "state": "approved"}, "assisted", ["t mark submitted"], []),
+        ({"letters": 1, "state": "approved"}, "auto", [], ["t mark"]),
+        ({"letters": 1, "state": "manual_required"}, "auto", ["t mark submitted"], []),
+        ({"letters": 1, "state": "submitted"}, "manual", [], ["t mark"]),
+        ({"letters": 1, "state": "saved"}, "manual", [], ["t mark"]),
+    ],
+)
+def test_review_secondary_keys_depend_on_job_state(db, mode, shown, hidden):
+    _, more = cli._review_keys(_key_db(**db), {"id": 1}, _Cfg(mode))
+    assert "s save" not in more
+    for key in shown:
+        assert key in more
+    for key in hidden:
+        assert key not in more

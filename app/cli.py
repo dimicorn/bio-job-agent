@@ -158,6 +158,33 @@ def read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, previous)
 
 
+def _review_keys(conn, row, cfg=None):
+    """The short default key line and the `?` line, showing only keys valid for this job."""
+    mode = cfg.apply.mode if cfg else None
+    apply = {"assisted": "a apply/fill", "manual": "a apply/open"}.get(mode, "a apply")
+    primary = f"{apply} · r reject · l later · o open · ? more · q quit"
+    versions = dict(
+        conn.execute(
+            "SELECT kind, COUNT(*) FROM material_versions WHERE job_id=? GROUP BY kind",
+            (row["id"],),
+        ).fetchall()
+    )
+    current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
+    state = current[0] if current else None
+    keys = ["i description", "x scoring"]
+    if versions.get("letter"):
+        keys += ["c letter/claims", "e edit letter", "w rewrite"]
+    if any(count >= 2 for count in versions.values()):
+        keys.append("d diff")
+    keys += ["v override", "m state"]
+    # t only once the person has an application to finish: a manual open or a fill handoff.
+    if state in ("manual_required", "unknown_result", "submitting") or (
+        state == "approved" and mode in ("manual", "assisted")
+    ):
+        keys.append("t mark submitted")
+    return primary, " · ".join(keys)
+
+
 def _review(conn, rows, cfg=None, profile=None):
     if not sys.stdin.isatty():
         raise ValueError("Review needs an interactive terminal: uv run bio-jobs review")
@@ -170,22 +197,16 @@ def _review(conn, rows, cfg=None, profile=None):
         console.rule(f"{index}/{len(rows)}")
         jobview.card(row, target=console)
         _materials_summary(conn, row)
-        console.print(
-            "o open | s save | r reject | l later | i description | x scoring | "
-            "c letter/claims | v override | e edit letter | w rewrite | d diff | "
-            + (
-                "a approve/fill"
-                if cfg and cfg.apply.mode == "assisted"
-                else "a approve/open"
-                if cfg and cfg.apply.mode == "manual"
-                else "a approve"
-            )
-            + " | t mark submitted | m state | q quit"
-        )
+        primary, more = _review_keys(conn, row, cfg)
+        console.print(primary)
         while True:
             action = read_key()
             if action in ("q", ""):
                 return
+            if action == "?":
+                console.print(more)
+                console.print(primary)
+                continue
             if action in ("e", "w", "d", "a", "t", "m"):
                 try:
                     if action == "d":
@@ -345,8 +366,8 @@ def _review(conn, rows, cfg=None, profile=None):
                 except ValueError as exc:
                     console.print(_text(str(exc)))
                 continue
-            if action in ("s", "r", "l"):
-                decision = {"s": "saved", "r": "rejected", "l": "later"}[action]
+            if action in ("r", "l"):
+                decision = {"r": "rejected", "l": "later"}[action]
                 review_job(conn, row["id"], decision)
                 console.print(f"{decision.capitalize()}.")
                 break

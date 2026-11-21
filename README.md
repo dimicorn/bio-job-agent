@@ -40,7 +40,8 @@ uv run bio-jobs show 12  # one job's evidence, gaps, must-haves and keywords
 uv run bio-jobs review   # review jobs and prepare applications
 ```
 
-In an interactive terminal, use `s` to save a job or `a` to prepare and approve it.
+In an interactive terminal, each card ends with `a apply · r reject · l later · o open · ? more · q quit`;
+`?` lists the other keys valid for that job. `a` prepares and approves the application.
 Check the cover letter, screening answers, and warnings before confirming. Manual
 mode is the default. It opens the application link for you to complete, and `t`
 records a submission you completed. Assisted and auto modes fill the form in your
