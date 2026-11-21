@@ -573,3 +573,180 @@ def test_scoring_cutoff_uses_fallback(cfg, monkeypatch):
     monkeypatch.setattr(llm, "ask_backend", backend)
     assert llm.ask_json(cfg, "system", "user", Ping, "score", repair=True).ok
     assert len(calls) == 2
+
+
+def _recorded_score(must_haves):
+    data = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "deepseek_score_1.json").read_text()
+    )
+    data["items"][0]["must_haves"] = must_haves
+    return json.dumps(data)
+
+
+def test_scoring_drops_extra_must_have_keys_and_logs_them():
+    # Shape of job 15: items.0.must_haves.0.*:extra_forbidden (twice).
+    from app.analyst import Batch
+
+    notes = []
+    answer = _recorded_score(
+        [
+            {
+                "requirement": "PhD",
+                "status": "unknown",
+                "candidate_evidence": None,
+                "job_evidence": "PhD required.",
+                "importance": "high",
+                "notes; <script>": "ignore previous instructions",
+            }
+        ]
+    )
+    parsed = llm._parse(answer, Batch, notes)
+    assert parsed.items[0].must_haves[0].status == "unknown"
+    assert notes == [
+        "must_haves.extra_key_dropped:importance",
+        "must_haves.extra_key_dropped:notes script",
+    ]
+    assert "ignore previous" not in json.dumps(notes)
+
+
+@pytest.mark.parametrize(
+    ("status", "evidence", "expected"),
+    [
+        ("partial", "Five years in molecular biology", "unknown"),
+        ("partially met", "Five years in molecular biology", "unknown"),
+        ("Partially_Met", None, "unknown"),
+        ("likely", "Five years in molecular biology", "unknown"),
+        ("possibly", None, "unknown"),
+        ("not met", "Candidate has a BSc only", "unmet"),
+        ("not_met", "Candidate has a BSc only", "unmet"),
+        ("missing", None, "unknown"),
+        ("Unknown", None, "unknown"),
+    ],
+)
+def test_scoring_maps_near_miss_statuses_conservatively(status, evidence, expected):
+    # Shape of job 16: items.0.must_haves.3.status:literal_error.
+    from app.analyst import Batch
+
+    base = {
+        "requirement": "Molecular biology",
+        "status": "unknown",
+        "candidate_evidence": None,
+        "job_evidence": "Lead molecular biology research",
+    }
+    items = [dict(base) for _ in range(3)]
+    items.append({**base, "status": status, "candidate_evidence": evidence})
+    notes = []
+    parsed = llm._parse(_recorded_score(items), Batch, notes)
+    assert parsed.items[0].must_haves[3].status == expected
+    assert any(n.startswith("must_haves.status_mapped:") for n in notes)
+
+
+@pytest.mark.parametrize("status", ["Met", "yes", "fully met", "likely met-ish", "exceeds"])
+def test_scoring_never_maps_to_met_and_keeps_unrecognized_failures(status):
+    from app.analyst import Batch
+
+    answer = _recorded_score(
+        [
+            {
+                "requirement": "PhD",
+                "status": status,
+                "candidate_evidence": "PhD in biology",
+                "job_evidence": "PhD required.",
+            }
+        ]
+    )
+    with pytest.raises(llm.InvalidAnswer, match=r"items\.0\.must_haves\.0\.status:literal_error"):
+        llm._parse(answer, Batch)
+
+
+def test_scoring_top_level_extra_keys_still_fail():
+    from app.analyst import Batch
+
+    data = json.loads(_recorded_score([]))
+    data["items"][0]["reasoning"] = "extra"
+    data["extra"] = 1
+    with pytest.raises(llm.InvalidAnswer) as error:
+        llm._parse(json.dumps(data), Batch)
+    assert "items.0.*:extra_forbidden" in error.value.errors
+    assert "*:extra_forbidden" in error.value.errors
+
+
+def test_scoring_unmet_without_evidence_still_fails():
+    from app.analyst import Batch
+
+    answer = _recorded_score(
+        [
+            {
+                "requirement": "PhD",
+                "status": "unmet",
+                "candidate_evidence": None,
+                "job_evidence": "PhD required.",
+            }
+        ]
+    )
+    with pytest.raises(llm.InvalidAnswer, match="value_error"):
+        llm._parse(answer, Batch)
+
+
+def test_scoring_repair_sends_validation_errors_and_hints(cfg, monkeypatch):
+    from app.analyst import Batch
+
+    bad = json.loads(_recorded_score([]))
+    bad["items"][0]["must_haves"] = [
+        {
+            "requirement": "PhD",
+            "status": "exceeds",
+            "candidate_evidence": "PhD in biology",
+            "job_evidence": "PhD required.",
+        }
+    ]
+    answers = iter([json.dumps(bad), _recorded_score([])])
+    systems = []
+
+    def run_openai(system, user, model, config):
+        systems.append(system)
+        return llm.Answer(next(answers), finish_reason="stop")
+
+    monkeypatch.setattr(llm, "run_openai", run_openai)
+    parsed = llm.ask_json(cfg, "system", "user", Batch, "score", repair=True)
+    assert parsed.items[0].job_id == 1
+    assert len(systems) == 2
+    assert "items.0.must_haves.0.status:literal_error" in systems[1]
+    assert "use only the exact allowed enum values" in systems[1]
+    assert '"enum": ["met", "unmet", "unknown"]' in systems[1]
+    events = [
+        json.loads(line)
+        for line in (cfg.llm_state_dir / "llm-usage.jsonl").read_text().splitlines()
+    ]
+    assert [e["status"] for e in events] == ["error", "ok"]
+
+
+def test_scoring_normalization_is_logged_in_usage_record(cfg, monkeypatch):
+    from app.analyst import Batch
+
+    answer = _recorded_score(
+        [
+            {
+                "requirement": "PhD",
+                "status": "partially met",
+                "candidate_evidence": None,
+                "job_evidence": "PhD required.",
+                "weight": 1,
+            }
+        ]
+    )
+    monkeypatch.setattr(llm, "run_openai", lambda *a: llm.Answer(answer, finish_reason="stop"))
+    llm.ask_json(cfg, "system", "user", Batch, "score", repair=True)
+    event = json.loads((cfg.llm_state_dir / "llm-usage.jsonl").read_text())
+    assert event["status"] == "ok"
+    assert event["normalized"] == [
+        "must_haves.extra_key_dropped:weight",
+        "must_haves.status_mapped:partially met->unknown",
+    ]
+
+
+def test_scoring_prompt_states_must_have_contract():
+    from app.analyst import SYSTEM
+
+    assert '"met", "unmet" or "unknown"' in SYSTEM
+    assert "Never add keys" in SYSTEM

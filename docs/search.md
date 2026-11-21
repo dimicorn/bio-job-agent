@@ -23,8 +23,12 @@ Review shows unmet and unknown requirements with candidate and job evidence as
 checks before applying. Missing eligibility evidence never automatically excludes a job.
 Scoring failures identify the job, backend, model, safe validation paths or failure
 category, and a next step in command output and `stats`. Failed batches are split once;
-invalid single-job answers receive one repair attempt and may use the configured
-fallback. Cut-off answers may also use that fallback without a quota cooldown.
+invalid single-job answers receive one repair attempt, whose prompt lists the validation
+errors with how to fix them, and may use the configured fallback. Before validation,
+unknown extra keys inside must-have items are dropped and near-synonym statuses are mapped
+conservatively: partial, likely or possible matches become unknown, "not met" or "missing"
+becomes unmet only with explicit candidate evidence, and nothing is mapped to met. Each
+adjustment is listed under `normalized` in the LLM usage log; other schema errors still fail. Cut-off answers may also use that fallback without a quota cooldown.
 
 Next to the LLM score, `list`, `review` and `export` show a **resume keyword match** computed without any LLM call: the share of the job's biotech/pharma R&D keywords (techniques, assays, modalities, therapeutic areas, platforms, multiword terms such as "flow cytometry" or "single-cell RNA-seq", and acronyms from the job text) that also appear in `resume.md`, with the top present and missing ones. Benefits, EEO, privacy and company-blurb text is ignored, and case, plurals, hyphens, British spellings and common abbreviations are folded together. The result is cached per job and recomputed when the job text or `resume.md` changes. It is informational only: it never changes the LLM score, the score gate or any filter. See [resume keyword match](keywords.md).
 
