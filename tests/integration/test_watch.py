@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from rich.console import Console
 
 from app import analyst, cli, doctor, watch
 from app.db import connect
@@ -334,7 +333,9 @@ def test_partial_detail_page_health(cfg, conn, profile, sources):
     assert health["consecutive_failures"] == 1
 
 
-def test_health_failure_recovery_and_reporting(cfg, conn, profile, sources, transport, monkeypatch):
+def test_health_failure_recovery_and_reporting(
+    console_output, cfg, conn, profile, sources, transport, monkeypatch
+):
     run(cfg, conn, profile, sources, transport)
     for _ in range(2):
         run(cfg, conn, profile, [sources[0]], response_transport(None, 503))
@@ -346,8 +347,7 @@ def test_health_failure_recovery_and_reporting(cfg, conn, profile, sources, tran
     row = conn.execute("SELECT * FROM sources WHERE id=?", (sources[0].id,)).fetchone()
     assert row["consecutive_failures"] == 0 and row["last_error"] == error
     output = io.StringIO()
-    for module in (cli, doctor):
-        monkeypatch.setattr(module, "console", Console(file=output, width=500))
+    console_output(output, width=500)
     cli._stats(conn, cfg)
     doctor.run(cfg)
     text = output.getvalue()

@@ -12,6 +12,7 @@ import yaml
 
 from app import answers, forms, materials, resume_pdf
 from app.candidate.profile import import_profile
+from app.console import log
 from app.resume import require_reviewed, resume_text
 
 TERMINAL = ("submitted", "unknown_result", "withdrawn")
@@ -45,7 +46,7 @@ def status(conn, row, kind, version):
     return "current", item
 
 
-def prepare_materials(cfg, conn, profile, row, *, output=print):
+def prepare_materials(cfg, conn, profile, row, *, output=log):
     """Create a missing or stale letter and check the supplied resume PDF."""
     require_reviewed(cfg, profile)
     current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
@@ -80,7 +81,7 @@ def prepare_materials(cfg, conn, profile, row, *, output=print):
     return result
 
 
-def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print, read_form=None):
+def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=log, read_form=None):
     """Read the form's questions, ask only what answers.yaml cannot answer, then refresh the draft."""
     version = import_profile(conn, profile)
     found, item = status(conn, row, "answers", version)

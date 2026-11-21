@@ -150,6 +150,15 @@ under the gitignored `run-summaries/` directory with run IDs,
 source outcomes, job changes, scoring failures, application transitions, and notification
 results. Summaries contain IDs and error categories, never CVs, answers, credentials, or provider
 response text. A summary left in `running` state indicates the process did not finish cleanly.
+These commands end with one compact line counting the same things, for example
+`09:14:02 scan done: 6 sources (1 error, 5 ok) · jobs 3 new · scored 3`.
+
+Run progress is printed as timestamped lines under a header for each phase (Sync, Score,
+Letters, Prepare, Apply, Alerts); lines from parallel workers carry the worker name in bold.
+Outcomes are coloured: green `✓` done or filled, yellow `!` warning, yellow `⊘` blocked or left
+for you, red `✗` failed, dim detail. Job and employer text is shown literally, never as
+terminal styling. Output is plain text when redirected (for example to `logs/watch.log`) or when
+`NO_COLOR` is set; the timestamps and symbols stay.
 
 Long-running scan, analyze, letters, prepare, watch, autopilot and apply commands prevent idle sleep on
 macOS while they run. Ctrl+C or SIGTERM requests a stop; scoring and letter requests already

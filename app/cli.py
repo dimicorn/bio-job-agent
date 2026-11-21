@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import json
 import logging
-import re
 import sqlite3
 import sys
 import webbrowser
@@ -13,12 +12,13 @@ from pathlib import Path
 
 import httpx
 import yaml
-from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
 from app import answers, applications, keywords, materials, stop
 from app.candidate.profile import import_profile, load_profile
+from app.console import Handler, console, fail, header, log, ok, run_summary, summary, warn
+from app.console import text as _text
 from app.db import connect, migrate
 from app.pipeline.discover import discover
 from app.resume import digest
@@ -28,13 +28,7 @@ from app.sources.feed_review import register_feed_review_command, run_feed_revie
 from app.sources.firms import register_firms_command, run_firms_command
 from app.store import export_csv, list_jobs, override_score, review_job
 
-console = Console(markup=False)
-
-
-def _text(value) -> Text:
-    # Source data must not become Rich markup or terminal escape sequences.
-    value = re.sub(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))", "", str(value or ""))
-    return Text(re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", value))
+STATUS_STYLE = {"ok": "green", "partial": "yellow", "error": "red", "cooldown": "dim"}
 
 
 def _positive(value):
@@ -349,7 +343,7 @@ def _review(conn, rows, cfg=None, profile=None):
                         applications.check_company(cfg, conn, row)
                         prepared = _prepare(conn, row, cfg, profile, interactive=True)
                         if prepared.problems:
-                            console.print("Approval not recorded.")
+                            console.print(_text("Approval not recorded.", "yellow"))
                             continue
                         expected = {}
                         if prepared.created:
@@ -403,7 +397,7 @@ def _review(conn, rows, cfg=None, profile=None):
                                 expected_answers_hash=exc.answers_hash,
                             )
                         approved_this_run += 1
-                        console.print(f"Approved. Apply mode: {cfg.apply.mode}.")
+                        console.print(_text(f"Approved. Apply mode: {cfg.apply.mode}.", "green"))
                         for path in paths:
                             console.print(_text(path))
                         if cfg.apply.mode == "assisted":
@@ -419,7 +413,7 @@ def _review(conn, rows, cfg=None, profile=None):
                                     profile,
                                     [row],
                                     job=row["id"],
-                                    output=lambda message: console.print(_text(message)),
+                                    output=log,
                                 )
                             continue
                         if cfg.apply.mode != "manual":
@@ -442,7 +436,7 @@ def _review(conn, rows, cfg=None, profile=None):
                             row,
                             input("Type submitted to confirm you completed the application: "),
                         )
-                        console.print("Recorded submitted (user confirmed).")
+                        console.print(_text("Recorded submitted (user confirmed).", "green"))
                     elif action == "m":
                         value = input(
                             "State (saved/preparing/awaiting_review/blocked/manual_required/withdrawn): "
@@ -458,7 +452,7 @@ def _review(conn, rows, cfg=None, profile=None):
                         row["application_state"] = value
                         console.print(f"State: {value}")
                 except (ValueError, RuntimeError, OSError) as exc:
-                    console.print(_text(str(exc)))
+                    console.print(_text(str(exc), "red"))
                 continue
             if action == "o":
                 if not webbrowser.open(row["apply_url"]):
@@ -504,42 +498,43 @@ def _show_materials(conn, row, profile=None, cfg=None):
             for claim in provenance.get("claims", []):
                 console.print(_text("Claim: " + claim["text"]))
                 if not claim.get("fact_ids"):
-                    console.print("  WARNING: no cited facts")
+                    console.print(_text("  WARNING: no cited facts", "yellow"))
                 for fact_id in claim.get("fact_ids", []):
                     if (
                         profile is None
                         or not isinstance(fact_id, int)
                         or not 0 <= fact_id < len(profile.facts)
                     ):
-                        console.print(_text(f"  WARNING: cited fact {fact_id} no longer exists"))
+                        console.print(
+                            _text(f"  WARNING: cited fact {fact_id} no longer exists", "yellow")
+                        )
                     else:
                         fact = profile.facts[fact_id]
                         console.print(_text(f"  Fact: {fact.fact}\n  CV evidence: {fact.evidence}"))
         if item["pdf_path"]:
             console.print(_text(item["pdf_path"]))
         for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):
-            console.print(_text("WARNING: " + warning))
+            console.print(_text("WARNING: " + warning, "yellow"))
 
 
 def _prepare(conn, row, cfg, profile, *, interactive, show="created"):
     """Create missing/stale materials, show them, then ask unanswered screening questions."""
     from app.prepare import prepare_answers, prepare_materials
 
-    def say(message):
-        console.print(_text(message))
+    say = log
 
     result = prepare_materials(cfg, conn, profile, row, output=say)
     if show == "always" or result.created:
         _show_materials(conn, row, profile, cfg)
     prepare_answers(cfg, conn, profile, row, result, interactive=interactive, output=say)
     if result.created:
-        say("Prepared: " + ", ".join(result.created))
+        say(ok("Prepared: " + ", ".join(result.created)))
     if result.current:
         say("Already current, left unchanged: " + ", ".join(result.current))
     for problem in result.problems:
-        say("Not prepared: " + problem)
+        say(fail("Not prepared: " + problem))
     if result.unanswered:
-        say("Unanswered screening questions:")
+        say(warn("Unanswered screening questions:"))
         for item in result.unanswered:
             say(f"  - {item['question']}" + ("" if item["required"] else " (optional)"))
         if not interactive:
@@ -736,9 +731,7 @@ def _run(args, cfg):
 
         configured = cfg.with_config()
         check(configured)
-        console.print(
-            "LLM check: OK (structured answer validated). See stats for the backend used."
-        )
+        log(ok("LLM check: OK (structured answer validated). See stats for the backend used."))
         return 0
     if args.command not in ("init", "import-profile"):
         cfg = cfg.with_config()
@@ -746,7 +739,7 @@ def _run(args, cfg):
     with connect(cfg.resolved(cfg.database_path)) as conn:
         migrate(conn)
         if args.command == "init":
-            console.print("Database ready")
+            log(ok("Database ready"))
             return 0
         if args.command == "unmerge":
             from app.pipeline.dedupe import unmerge
@@ -818,7 +811,10 @@ def _run(args, cfg):
             return 0
         if not profile.reviewed:
             console.print(
-                "Profile is unreviewed; edit your candidate YAML before relying on these preferences."
+                _text(
+                    "Profile is unreviewed; edit your candidate YAML before relying on these preferences.",
+                    "yellow",
+                )
             )
         if args.command in ("diff", "state"):
             row = conn.execute("SELECT id FROM jobs WHERE id=?", (args.job,)).fetchone()
@@ -842,7 +838,7 @@ def _run(args, cfg):
                 profile,
                 sources,
                 scheduled=args.scheduled,
-                output=lambda message: console.print(_text(message)),
+                output=log,
             )
             return int(bool(result.get("errors")))
         if getattr(args, "mode", None):
@@ -858,6 +854,7 @@ def _run(args, cfg):
 
             require_reviewed(cfg, profile)
         if args.command in ("sync", "scan") or poll:
+            header("Sync")
             results = discover(
                 conn, profile, sources, timeout=cfg.http_timeout, user_agent=cfg.user_agent
             )
@@ -865,7 +862,9 @@ def _run(args, cfg):
             for row in results:
                 table.add_row(
                     *(
-                        _text(row.get(key))
+                        _text(row.get(key), STATUS_STYLE.get(row.get("status"), ""))
+                        if key == "status"
+                        else _text(row.get(key), "red" if key == "error" else "")
                         for key in ("source", "status", "fetched", "accepted", "error")
                     )
                 )
@@ -875,8 +874,9 @@ def _run(args, cfg):
         if args.command in ("scan", "analyze") or poll:
             from app.analyst import analyze_new
 
+            header("Score")
             done = analyze_new(cfg, conn, profile, sources)
-            console.print(f"Scored {done} jobs; unchanged evaluations reused.")
+            log(ok(f"Scored {done} jobs; unchanged evaluations reused."))
             if not poll:
                 return int(
                     args.command == "scan"
@@ -889,6 +889,7 @@ def _run(args, cfg):
         if args.command in ("apply", "autopilot"):
             from app.autopilot import run
 
+            header("Apply")
             run(
                 cfg,
                 conn,
@@ -896,7 +897,7 @@ def _run(args, cfg):
                 ranked,
                 job=getattr(args, "job", None),
                 unattended=args.command == "autopilot",
-                output=lambda message: console.print(_text(message)),
+                output=log,
             )
             return 0
         if args.command == "import":
@@ -961,6 +962,7 @@ def _run(args, cfg):
             ):
                 raise ValueError(applications.score_gate_message(cfg, selected[0]))
             if args.command == "prepare":
+                header(f"Prepare job {selected[0]['id']}")
                 result = _prepare(
                     conn,
                     selected[0],
@@ -976,13 +978,14 @@ def _run(args, cfg):
                     "awaiting_review (press a)."
                 )
             elif args.command == "letters":
+                header("Letters")
                 done = materials.write_letters(cfg, conn, profile, selected, force=args.force)
-                console.print(
-                    f"Prepared {done} letters. Review shows warnings and fact provenance."
-                )
+                log(ok(f"Prepared {done} letters. Review shows warnings and fact provenance."))
                 if args.job and not done:
-                    console.print(
-                        "No new letter prepared; the current version may already be up to date. Use --force to rebuild."
+                    log(
+                        warn(
+                            "No new letter prepared; the current version may already be up to date. Use --force to rebuild."
+                        )
                     )
                     return 1
             elif args.command == "answers":
@@ -1006,7 +1009,7 @@ def _run(args, cfg):
                     profile,
                     selected,
                     interactive=not args.show,
-                    output=lambda text: console.print(_text(text)),
+                    output=lambda line: console.print(_text(line)),
                 )
                 console.print(
                     f"Screening drafts saved; answer bank: {cfg.resolved(cfg.apply.answers_file)}"
@@ -1140,7 +1143,7 @@ def main(argv=None) -> int:
         return 0
     if args.command == "run":
         args.command = "autopilot"
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[Handler()])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         cfg = Settings()
@@ -1156,15 +1159,16 @@ def main(argv=None) -> int:
             if args.command in ("sync", "scan", "watch", "autopilot", "apply"):
                 from app.runlog import run
 
-                with run(args.command) as summary:
+                with run(args.command) as record:
                     result = _run(args, cfg)
                     if result:
-                        summary["exit_code"] = result
+                        record["exit_code"] = result
+                    summary(f"{args.command} done", run_summary(record))
                     return result
             return _run(args, cfg)
 
     except KeyboardInterrupt:
-        console.print("Stopped.")
+        console.print(_text("Stopped.", "yellow"))
         return stop.exit_code()
     except (
         ValueError,
@@ -1175,7 +1179,7 @@ def main(argv=None) -> int:
         httpx.HTTPError,
         yaml.YAMLError,
     ) as exc:
-        console.print(f"Error: {exc}")
+        console.print(_text(f"Error: {exc}", "bold red"))
         return 1
 
 

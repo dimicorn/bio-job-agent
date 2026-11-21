@@ -286,7 +286,10 @@ def analyze_new(cfg, conn, profile, sources, job_ids=None):
             return [(batch, None, exc)]
 
     for _, future in stop.completed_batches(
-        batches, cfg.analyst.parallel, lambda executor, batch: executor.submit(score_batch, batch)
+        batches,
+        cfg.analyst.parallel,
+        lambda executor, batch: executor.submit(score_batch, batch),
+        name="score",
     ):
         for batch, results, exc in future.result():
             if exc is not None:

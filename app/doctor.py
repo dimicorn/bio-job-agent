@@ -8,15 +8,14 @@ import sys
 
 import httpx
 import yaml
-from rich.console import Console
 from rich.table import Table
 
 from app.candidate.profile import load_profile, require_name
+from app.console import console
 from app.llm import check, fallback_cfg
 from app.settings import Settings
 from app.sources.config import load_sources
 
-console = Console(markup=False)
 CLI_EXECUTABLES = {"codex": "codex", "claude_code": "claude", "opencode": "opencode", "pi": "pi"}
 
 
