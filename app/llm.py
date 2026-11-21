@@ -142,10 +142,13 @@ def _safe_errors(exc: ValidationError, model: type[BaseModel]) -> list[str]:
     ][:20]
 
 
-def _parse[T: BaseModel](text: str, model: type[T]) -> T:
+def _parse[T: BaseModel](text: str, model: type[T], notes: list[str] | None = None) -> T:
+    """Validate an answer; model validators may append safe normalization notes."""
     text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text.strip())
     try:
-        return model.model_validate_json(text, strict=True)
+        return model.model_validate_json(
+            text, strict=True, context={"normalized": notes if notes is not None else []}
+        )
     except ValidationError as exc:
         raise InvalidAnswer(_safe_errors(exc, model)) from None
     except ValueError:
@@ -239,6 +242,26 @@ def fallback_cfg(cfg: Settings) -> Settings:
     return cfg.model_copy(update={"analyst": analyst})
 
 
+REPAIR_HINTS = {
+    "extra_forbidden": "remove every key the schema does not define",
+    "literal_error": "use only the exact allowed enum values from the schema",
+    "missing": "include every required key",
+    "json": "return one valid JSON object without markdown",
+}
+
+
+def repair_note(errors: list[str]) -> str:
+    hints = [
+        hint
+        for kind, hint in REPAIR_HINTS.items()
+        if any(e.rsplit(":", 1)[-1] == kind or e.startswith(kind + ":") for e in errors)
+    ]
+    note = "\nCorrect these validation errors in a fresh answer: " + "; ".join(errors)
+    if hints:
+        note += ". To fix them: " + "; ".join(hints) + "."
+    return note
+
+
 def ask_json[T: BaseModel](
     cfg: Settings, system: str, user: str, model: type[T], purpose="other", *, repair=False
 ) -> T:
@@ -253,9 +276,7 @@ def ask_json[T: BaseModel](
             return ask_backend(
                 config,
                 config.analyst.backend,
-                system
-                + "\nCorrect these validation errors in a fresh answer: "
-                + "; ".join(exc.errors),
+                system + repair_note(exc.errors),
                 user,
                 model,
                 purpose,
@@ -306,6 +327,7 @@ def ask_backend[T: BaseModel](
     started = time.monotonic()
     answer = Answer("", model=cfg.analyst.model)
     status = "error"
+    notes: list[str] = []
     try:
         system = f"{system}\n\n{NO_TOOLS}\n\n{_json_note(model)}"
         if backend == "openai":
@@ -316,7 +338,7 @@ def ask_backend[T: BaseModel](
             answer = run_cli(backend, system, user, model, cfg)
         else:
             raise ValueError(f"Unknown analyst.backend: {backend}")
-        result = _parse(answer.text, model)
+        result = _parse(answer.text, model, notes)
         status = "ok"
         return result
     except Exception as exc:
@@ -352,6 +374,7 @@ def ask_backend[T: BaseModel](
             usage_available=bool(u),
             cost_usd=cost,
             duration_seconds=round(time.monotonic() - started, 3),
+            **({"normalized": notes} if notes else {}),
         )
 
 

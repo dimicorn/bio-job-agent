@@ -1,9 +1,10 @@
 """Batched, versioned matching after deterministic discovery filters."""
 
 import json
+import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from app.candidate.profile import import_profile
 from app.llm import InvalidAnswer, ask_json
@@ -58,11 +59,74 @@ class Dimensions(StrictModel):
     salary_arrangements: Dimension
 
 
+# Near-miss must-have statuses some models return. Nothing is ever mapped to "met".
+UNKNOWN_STATUSES = {
+    "unknown",
+    "partial",
+    "partially met",
+    "partly met",
+    "partially",
+    "likely",
+    "likely met",
+    "possibly",
+    "possibly met",
+    "probably",
+    "probably met",
+    "maybe",
+    "uncertain",
+    "unclear",
+    "unverified",
+    "not specified",
+    "not stated",
+    "insufficient evidence",
+    "n/a",
+    "na",
+    "not applicable",
+}
+UNMET_STATUSES = {"unmet", "not met", "missing", "not satisfied"}
+
+
+def _note(info: ValidationInfo, message: str) -> None:
+    notes = (info.context or {}).get("normalized")
+    if isinstance(notes, list) and len(notes) < 20:
+        notes.append(message)
+
+
+def _safe_token(value: str) -> str:
+    """Model output may contain anything; keep only a short identifier-like token for logs."""
+    return re.sub(r"[^A-Za-z0-9_ ]", "", value)[:40] or "?"
+
+
 class Requirement(StrictModel):
     requirement: str = Field(min_length=1)
     status: Literal["met", "unmet", "unknown"]
     candidate_evidence: str | None
     job_evidence: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_near_misses(cls, value, info: ValidationInfo):
+        """Drop extra keys and map near-synonym statuses conservatively before validation."""
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key in [k for k in value if k not in cls.model_fields]:
+            del value[key]
+            _note(info, f"must_haves.extra_key_dropped:{_safe_token(str(key))}")
+        status = value.get("status")
+        if isinstance(status, str) and status not in ("met", "unmet", "unknown"):
+            folded = re.sub(r"[\s_-]+", " ", status.strip().lower())
+            evidence = value.get("candidate_evidence")
+            mapped = None
+            if folded in UNKNOWN_STATUSES:
+                mapped = "unknown"
+            elif folded in UNMET_STATUSES:
+                # Unmet still needs explicit candidate evidence; without it the answer is unknown.
+                mapped = "unmet" if isinstance(evidence, str) and evidence.strip() else "unknown"
+            if mapped:
+                value["status"] = mapped
+                _note(info, f"must_haves.status_mapped:{_safe_token(status)}->{mapped}")
+        return value
 
     @model_validator(mode="after")
     def known_requires_evidence(self):
@@ -109,6 +173,9 @@ Missing information is UNKNOWN, never evidence of failure. Use null score and un
 confidence for unknown dimensions. Partial confidence requires evidence on both sides.
 For must-haves use unmet ONLY for an explicit contradiction with candidate evidence;
 missing candidate evidence means unknown. Include every explicit mandatory requirement.
+Each must_haves item has exactly the keys requirement, status, candidate_evidence and
+job_evidence. status is exactly one of "met", "unmet" or "unknown": partial, likely or
+uncertain matches are "unknown". Never add keys that the schema does not define.
 List strengths, gaps, uncertainty_flags, overall confidence and recommendation.
 The application computes the weighted total and substitutes neutral 50 for null scores.
 Never return 50 for an unknown dimension: return null.
