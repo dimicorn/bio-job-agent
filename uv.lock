@@ -47,7 +47,6 @@ wheels = [
 
 [[package]]
 name = "bio-job-agent"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },

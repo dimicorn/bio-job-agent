@@ -1032,10 +1032,20 @@ def _run(args, cfg):
     return 0
 
 
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("bio-job-agent")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="bio-jobs", description="Local London industry job discovery"
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument("-c", "--config", type=Path, help="LLM YAML config (default: config.yaml)")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("help", help="Show commands")

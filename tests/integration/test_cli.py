@@ -34,6 +34,15 @@ def configured(console_output, tmp_path, monkeypatch):
     return cfg, output
 
 
+def test_version_prints_installed_package_version(capsys):
+    from importlib.metadata import version
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"bio-jobs {version('bio-job-agent')}"
+
+
 def test_default_and_help_do_not_initialise_or_prompt(configured, monkeypatch):
     cfg, _output = configured
     cfg.config_path.unlink()
