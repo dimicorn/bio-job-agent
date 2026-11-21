@@ -56,6 +56,7 @@ def _filters(parser, *, review=False):
     parser.add_argument("--employer", help="Employer contains this text")
     parser.add_argument("--location", help="Location contains this text")
     parser.add_argument("--source", help="Source ID")
+    parser.add_argument("--job", type=_positive, help="Only this job ID")
     parser.add_argument("--since", type=_date, help="Discovered on/after YYYY-MM-DD")
     parser.add_argument(
         "--status",
@@ -80,9 +81,13 @@ def _select(rows, args, *, review=False, min_score=0):
             and row.get("application_state") != args.application_state
         ):
             continue
+        if getattr(args, "job", None) and args.job not in row.get("grouped_job_ids", [row["id"]]):
+            continue
+        # A job added by link is the person's own pick: it skips the score gate too.
         if (
             not args.all_scores
             and min_score > 0
+            and not row.get("added_by_link")
             and row.get("review") != "saved"
             and not row.get("application_state")
             and (row.get("score") is None or row["score"] < min_score)
@@ -155,6 +160,8 @@ def _list(rows):
     for row in rows:
         if len(row.get("grouped_job_ids", [])) > 1:
             console.print(_text(f"{row['id']} grouped stored job IDs: {row['grouped_job_ids']}"))
+        for line in _link_lines(row)[:1]:
+            console.print(_text(f"{row['id']} {line}"))
         for origin in row["origins"]:
             console.print(
                 _text(
@@ -179,6 +186,18 @@ def _score_summary(row):
     if override:
         parts.append(f"User override: {override['recommendation']} — {override['reason']}")
     return "\n".join(parts)
+
+
+def _link_lines(row):
+    if not row.get("added_by_link"):
+        return []
+    notes = row.get("filter_notes") or []
+    if not notes:
+        return ["Added by link."]
+    return [
+        "Added by link; normally excluded by: " + "; ".join(notes),
+        "Kept for you to decide: save (s) or reject (r).",
+    ]
 
 
 def read_key() -> str:
@@ -212,6 +231,8 @@ def _review(conn, rows, cfg=None, profile=None):
         console.print(_text(row.get("date_label", "posting date unknown")))
         if row.get("company_cooldown_until"):
             console.print(_text(f"company cooldown until {row['company_cooldown_until'][:10]}"))
+        for line in _link_lines(row):
+            console.print(_text(line))
         console.print(_text(row["description"]))
         console.print(_text(_score_summary(row)))
         if row.get("evaluation"):
@@ -597,6 +618,60 @@ def _stats(conn, cfg):
     console.print(table)
 
 
+def _add(conn, cfg, profile, sources, args):
+    from app.analyst import analyze_new, attach_evaluations
+    from app.pipeline.add import add
+
+    result = add(
+        conn,
+        args.url,
+        sources,
+        employer=args.employer,
+        timeout=cfg.http_timeout,
+        user_agent=cfg.user_agent,
+    )
+    job_id = result["job_id"]
+    if result["status"] == "existing":
+        console.print(_text(f"Already stored as job {job_id}; nothing added."))
+    elif result["status"] == "merged":
+        console.print(
+            _text(f"Matches stored job {job_id}; the link was added as another origin of it.")
+        )
+    else:
+        where = "watchlist board" if result["on_watchlist"] else "not on the watchlist"
+        console.print(_text(f"Added job {job_id} by link ({result['adapter']}; {where})."))
+    scoring = None
+    if result["status"] != "existing":
+        try:
+            analyze_new(cfg, conn, profile, sources, job_ids={job_id})
+        except (ValueError, RuntimeError, OSError) as exc:
+            scoring = str(exc)
+    rows = attach_evaluations(conn, cfg, profile, list_jobs(conn, profile, sources, cfg))
+    row = next((r for r in rows if job_id in r.get("grouped_job_ids", [r["id"]])), None)
+    if row is None:
+        # Stored, but no longer open or otherwise hidden; show what is on record.
+        console.print(_text(f"Job {job_id} is stored but not open for review."))
+        return 0
+    console.print(_text(f"{row['title']} — {row['employer']} ({row['location'] or 'unknown'})"))
+    for line in _link_lines(row)[:1]:
+        console.print(_text(line))
+    if row.get("score") is not None:
+        console.print(_text("Score: " + _score_summary(row).split("\n", 2)[0]))
+        if row.get("evaluation"):
+            console.print(_text(f"Recommendation: {row['evaluation']['recommendation']}"))
+    else:
+        console.print(
+            _text(
+                "Score: unscored"
+                + (f" ({scoring})" if scoring else "")
+                + ". Next: fix that, then uv run bio-jobs analyze."
+            )
+        )
+    status = " --status all" if row["review"] != "new" else ""
+    console.print(_text(f"Review: uv run bio-jobs review --job {row['id']}{status}"))
+    return 0
+
+
 def _run(args, cfg):
     from app.private import tighten_configured
 
@@ -725,6 +800,8 @@ def _run(args, cfg):
                 console.print(f"Application {args.job}: {args.value}")
             return 0
         sources = load_sources(cfg.resolved(cfg.sources_path))
+        if args.command == "add":
+            return _add(conn, cfg, profile, sources, args)
         if args.command == "watch":
             from app.watch import run
 
@@ -934,6 +1011,11 @@ def main(argv=None) -> int:
     extraction = sub.add_parser("extract-profile", help="Extract resume facts for mandatory review")
     extraction.add_argument("--output", type=Path)
     extraction.add_argument("--force", action="store_true", help="Replace the output YAML")
+    add = sub.add_parser(
+        "add", help="Add one job by link (Greenhouse, Lever, Ashby, Workable or any job page)"
+    )
+    add.add_argument("url", help="https:// link to the job posting")
+    add.add_argument("--employer", help="Employer name, when the page does not say")
     sub.add_parser("sync", help="Fetch public sources, respecting persistent cooldowns")
     sub.add_parser("scan", help="Sync public sources and score eligible jobs")
     watch = sub.add_parser("watch", help="One locked sync, score and new/changed job alert pass")

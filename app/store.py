@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 from app.applications import company_cooldown
 from app.models.posting import Posting
 from app.pipeline.dedupe import group_stored_jobs
-from app.pipeline.filter import exclusion, geography
+from app.pipeline.filter import exclusion, exclusions, geography
+from app.pipeline.normalize import key
 
 
 def parse_date(value):
@@ -17,8 +18,34 @@ def parse_date(value):
         return None
 
 
+NOTES = {
+    "unverified_industry": "industry: {employer} is not on the reviewed watchlist, so its "
+    "industry is unchecked",
+    "academic_employer": "industry: {employer} looks academic, NHS or a hospital",
+    "excluded_role": "role: the title is an excluded role type (postdoc, academic, sales)",
+    "seniority_or_role": "seniority: the title does not match your target_titles",
+    "geography": "geography: location '{location}' is outside your regions or unknown",
+}
+
+
+def link_notes(job, profile, cfg, *, industry_verified, now=None):
+    """Plain reasons the discovery filters would have excluded a job added by link."""
+    values = {"employer": job.employer, "location": job.location or "unknown"}
+    notes = [
+        NOTES[reason].format(**values)
+        for reason in exclusions(job, profile, industry_verified=industry_verified)
+    ]
+    days = cfg.search.max_posting_age_days if cfg else 0
+    posted = parse_date(job.posted_at)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    if days and posted and posted < current - timedelta(days=days):
+        notes.append(f"freshness: posted {job.posted_at[:10]}, older than {days} days")
+    return notes
+
+
 def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=False):
     current_sources = {s.id: s for s in sources if s.enabled}
+    verified_employers = {key(s.employer) for s in sources if s.enabled and s.industry_verified}
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
     result = []
@@ -53,10 +80,12 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
                 profile,
             )
         ]
+        # A job the person added by link stays visible whatever the filters say.
+        linked = [x for x in origins if x["adapter"] == "link" and x["present"]]
         retained = not prospects_only and (
             reviews.get(row["id"]) == "saved" or row["id"] in applications
         )
-        if (not eligible or row["status"] != "open") and not retained:
+        if (not (eligible or linked) or row["status"] != "open") and not retained:
             continue
         posted = parse_date(job.posted_at)
         reliable = [parse_date(x["first_seen_at"]) for x in eligible if x["first_seen_reliable"]]
@@ -70,7 +99,7 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
         days = cfg.search.max_posting_age_days if cfg else 0
         current = now or datetime.now(UTC)
         stale = bool(days and date and date < current.astimezone(UTC) - timedelta(days=days))
-        if stale and not retained:
+        if stale and not retained and not linked:
             continue
         label = (
             f"posted {job.posted_at}"
@@ -103,6 +132,16 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
                 "geography": geography(job, profile),
                 "origins": origins,
                 "locations": locations,
+                "added_by_link": bool(linked),
+                "filter_notes": link_notes(
+                    job,
+                    profile,
+                    cfg,
+                    industry_verified=key(job.employer) in verified_employers,
+                    now=current,
+                )
+                if linked and not eligible
+                else [],
             }
         )
     return group_stored_jobs(conn, result)
