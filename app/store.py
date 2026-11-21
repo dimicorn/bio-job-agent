@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from app.applications import company_cooldown
 from app.models.posting import Posting
 from app.pipeline.dedupe import group_stored_jobs
-from app.pipeline.filter import exclusion, exclusions, geography
+from app.pipeline.filter import board, exclusion, exclusions, geography
 from app.pipeline.normalize import key
 
 
@@ -45,7 +45,9 @@ def link_notes(job, profile, cfg, *, industry_verified, now=None):
 
 def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=False):
     current_sources = {s.id: s for s in sources if s.enabled}
-    verified_employers = {key(s.employer) for s in sources if s.enabled and s.industry_verified}
+    verified_employers = {
+        key(s.employer) for s in sources if s.enabled and s.industry_verified and not board(s)
+    }
     reviews = {row["job_id"]: row["decision"] for row in conn.execute("SELECT * FROM job_reviews")}
     applications = {r["job_id"]: r["state"] for r in conn.execute("SELECT * FROM applications")}
     result = []
@@ -133,6 +135,10 @@ def list_jobs(conn, profile, sources, cfg=None, now=None, *, prospects_only=Fals
                 "origins": origins,
                 "locations": locations,
                 "added_by_link": bool(linked),
+                "board_sources": list(
+                    dict.fromkeys(x["source_id"] for x in origins if x["adapter"] == "jsonfeed")
+                ),
+                "employer_reviewed": key(job.employer) in verified_employers,
                 "filter_notes": link_notes(
                     job,
                     profile,

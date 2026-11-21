@@ -106,8 +106,56 @@ def geography(job: Posting, profile: CandidateProfile) -> str:
     return "outside"
 
 
+# Job boards list employers nobody reviewed; these markers are checked on board postings
+# in addition to the standard filters. Research institutes, trusts and councils are not
+# commercial employers, and an agency advert hides the actual employer from vetting.
+BOARD_ACADEMIC = ("institute", "trust", "research council", "school of", "charity")
+AGENCY_NAMES = (
+    "recruitment",
+    "recruiting",
+    "recruiters",
+    "resourcing",
+    "staffing",
+    "talent",
+    "personnel",
+    "appointments",
+    "executive search",
+    "headhunters",
+)
+AGENCY_TEXT = (
+    "our client",
+    "my client",
+    "on behalf of a",
+    "on behalf of an",
+    "on behalf of our",
+    "delighted to be partnering with",
+    "are partnering with",
+    "recruitment agency",
+    "employment agency",
+)
+
+
+def board(source: SourceConfig) -> bool:
+    return source.adapter == "jsonfeed"
+
+
+def board_exclusions(job: Posting) -> list[str]:
+    employer = key(job.employer)
+    reasons = []
+    if any(contains(employer, x) for x in BOARD_ACADEMIC):
+        reasons.append("academic_employer")
+    description = key(job.description)
+    if any(contains(employer, x) for x in AGENCY_NAMES) or any(
+        contains(description, key(x)) for x in AGENCY_TEXT
+    ):
+        reasons.append("recruitment_agency")
+    return reasons
+
+
 def exclusion(job: Posting, source: SourceConfig, profile: CandidateProfile) -> str | None:
     reasons = exclusions(job, profile, industry_verified=source.industry_verified)
+    if board(source):
+        reasons += board_exclusions(job)
     return reasons[0] if reasons else None
 
 

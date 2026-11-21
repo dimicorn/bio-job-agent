@@ -1,0 +1,311 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Biotechnology Jobs — Latest Jobs",
+  "home_page_url": "https://biotechnologyjobs.co.uk",
+  "feed_url": "https://biotechnologyjobs.co.uk/jobs.json",
+  "description": "Latest job vacancies from Biotechnology Jobs.",
+  "language": "en-GB",
+  "user_comment": "Free to syndicate under CC BY 4.0 — attribution required. Attribution: include a link back to https://biotechnologyjobs.co.uk.",
+  "_licence": "CC BY 4.0",
+  "_attribution": "Jobs from Biotechnology Jobs (https://biotechnologyjobs.co.uk)",
+  "items": [
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/research-lead-senior-research-investigator-peptide-design-exploratory-sciences-isomorphic-labs-london",
+      "url": "https://biotechnologyjobs.co.uk/jobs/research-lead-senior-research-investigator-peptide-design-exploratory-sciences-isomorphic-labs-london",
+      "title": "Research Lead/ Senior Research Investigator (Peptide Design, Exploratory Sciences) · Isomorphic Labs · London, Greater London",
+      "summary": "Synthetic test description. Lead in-vitro pharmacology experiments for a drug discovery programme, design assays and pre",
+      "date_published": "2026-11-17T09:05:01+00:00",
+      "tags": [
+        "hybrid",
+        "lead"
+      ],
+      "_company": "Isomorphic Labs",
+      "_location": "London, Greater London",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Research Lead/ Senior Research Investigator (Peptide Design, Exploratory Sciences)",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Isomorphic Labs",
+          "@id": "https://biotechnologyjobs.co.uk/companies/isomorphic-labs#org",
+          "url": "https://biotechnologyjobs.co.uk/companies/isomorphic-labs",
+          "logo": "https://ftj-uploads.lon1.digitaloceanspaces.com/7430/isomorphic-labs.jpg",
+          "sameAs": "https://www.isomorphiclabs.com/"
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/research-lead-senior-research-investigator-peptide-design-exploratory-sciences-isomorphic-labs-london",
+        "datePosted": "2026-11-17T09:05:01+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Isomorphic Labs",
+          "value": "research-lead-senior-research-investigator-peptide-design-exploratory-sciences-isomorphic-labs-london"
+        },
+        "employmentType": "FULL_TIME",
+        "validThrough": "2026-12-21T13:00:10+00:00",
+        "description": "<p>Synthetic test description. Lead in-vitro pharmacology experiments for a drug discovery programme, design assays and present results to project teams.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-21T12:16:01+00:00",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "GB",
+            "addressLocality": "London",
+            "addressRegion": "Greater London"
+          }
+        },
+        "industry": "Biotechnology"
+      }
+    },
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/scientist-functional-genomics-genomics-london",
+      "url": "https://biotechnologyjobs.co.uk/jobs/scientist-functional-genomics-genomics-london",
+      "title": "Scientist - Functional Genomics · Genomics · London, Greater London",
+      "summary": "Synthetic test description. Run functional genomics experiments, analyse CRISPR screen data and work with computational ",
+      "date_published": "2026-11-19T13:37:51+00:00",
+      "tags": [
+        "permanent",
+        "hybrid",
+        "entry"
+      ],
+      "_company": "Genomics",
+      "_location": "London, Greater London",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Scientist - Functional Genomics",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Genomics"
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/scientist-functional-genomics-genomics-london",
+        "datePosted": "2026-11-19T13:37:51+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Genomics",
+          "value": "scientist-functional-genomics-genomics-london"
+        },
+        "employmentType": "FULL_TIME",
+        "validThrough": "2026-12-21T13:00:10+00:00",
+        "description": "<p>Synthetic test description. Run functional genomics experiments, analyse CRISPR screen data and work with computational scientists on target discovery.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-21T07:45:59+00:00",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "GB",
+            "addressLocality": "London",
+            "addressRegion": "Greater London"
+          }
+        },
+        "industry": "Biotechnology"
+      }
+    },
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/development-scientist-london-bond-williams-london",
+      "url": "https://biotechnologyjobs.co.uk/jobs/development-scientist-london-bond-williams-london",
+      "title": "Development Scientist - London · Bond Williams · London, Greater London",
+      "summary": "Synthetic test description. Our client, a growing life-sciences company, is looking for a development scientist to join ",
+      "date_published": "2026-11-20T15:16:25+00:00",
+      "tags": [
+        "mid"
+      ],
+      "_company": "Bond Williams",
+      "_location": "London, Greater London",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Development Scientist - London",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Bond Williams"
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/development-scientist-london-bond-williams-london",
+        "datePosted": "2026-11-20T15:16:25+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Bond Williams",
+          "value": "development-scientist-london-bond-williams-london"
+        },
+        "employmentType": "FULL_TIME",
+        "validThrough": "2027-01-01T15:16:25+00:00",
+        "description": "<p>Synthetic test description. Our client, a growing life-sciences company, is looking for a development scientist to join its formulation team.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-20T15:16:37+00:00",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "GB",
+            "addressLocality": "London",
+            "addressRegion": "Greater London"
+          }
+        },
+        "baseSalary": {
+          "@type": "MonetaryAmount",
+          "currency": "GBP",
+          "value": {
+            "@type": "QuantitativeValue",
+            "unitText": "YEAR",
+            "minValue": 45000,
+            "maxValue": 45000
+          }
+        },
+        "industry": "Biotechnology"
+      }
+    },
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/research-associate-in-low-cost-vaccine-manufacturing-in-yeast-imperial-college-london-london",
+      "url": "https://biotechnologyjobs.co.uk/jobs/research-associate-in-low-cost-vaccine-manufacturing-in-yeast-imperial-college-london-london",
+      "title": "Research Associate in Low-Cost Vaccine Manufacturing in Yeast · Imperial College London · London, Greater London",
+      "summary": "Synthetic test description. Join a university research group developing low-cost vaccine manufacturing processes.",
+      "date_published": "2026-11-20T00:00:00+00:00",
+      "tags": [
+        "contract",
+        "hybrid",
+        "entry"
+      ],
+      "_company": "Imperial College London",
+      "_location": "London, Greater London",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Research Associate in Low-Cost Vaccine Manufacturing in Yeast",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Imperial College London"
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/research-associate-in-low-cost-vaccine-manufacturing-in-yeast-imperial-college-london-london",
+        "datePosted": "2026-11-20T00:00:00+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Imperial College London",
+          "value": "research-associate-in-low-cost-vaccine-manufacturing-in-yeast-imperial-college-london-london"
+        },
+        "employmentType": "CONTRACTOR",
+        "validThrough": "2027-01-03T00:00:00+00:00",
+        "description": "<p>Synthetic test description. Join a university research group developing low-cost vaccine manufacturing processes.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-21T11:31:45+00:00",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {
+            "@type": "PostalAddress",
+            "addressCountry": "GB",
+            "addressLocality": "London",
+            "addressRegion": "Greater London"
+          }
+        },
+        "baseSalary": {
+          "@type": "MonetaryAmount",
+          "currency": "GBP",
+          "value": {
+            "@type": "QuantitativeValue",
+            "unitText": "YEAR",
+            "minValue": 50733,
+            "maxValue": 59484
+          }
+        },
+        "industry": "Biotechnology"
+      }
+    },
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/statistical-programmer-iiiiii-fsp-parexel-harrow",
+      "url": "https://biotechnologyjobs.co.uk/jobs/statistical-programmer-iiiiii-fsp-parexel-harrow",
+      "title": "Statistical Programmer I/II/III - FSP · Parexel · Remote",
+      "summary": "Synthetic test description. Write and validate statistical programs for clinical trial analyses in a remote team.",
+      "date_published": "2026-11-20T00:00:00+00:00",
+      "tags": [
+        "remote"
+      ],
+      "_company": "Parexel",
+      "_location": "Remote",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Statistical Programmer I/II/III - FSP",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Parexel"
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/statistical-programmer-iiiiii-fsp-parexel-harrow",
+        "datePosted": "2026-11-20T00:00:00+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Parexel",
+          "value": "statistical-programmer-iiiiii-fsp-parexel-harrow"
+        },
+        "employmentType": "FULL_TIME",
+        "validThrough": "2026-12-21T13:00:10+00:00",
+        "description": "<p>Synthetic test description. Write and validate statistical programs for clinical trial analyses in a remote team.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-21T00:16:19+00:00",
+        "jobLocationType": "TELECOMMUTE",
+        "applicantLocationRequirements": {
+          "@type": "Country",
+          "name": "GB"
+        },
+        "industry": "Biotechnology"
+      }
+    },
+    {
+      "id": "https://biotechnologyjobs.co.uk/jobs/executive-director-clinical-pharmacologypharmacometrics-recursion-2",
+      "url": "https://biotechnologyjobs.co.uk/jobs/executive-director-clinical-pharmacologypharmacometrics-recursion-2",
+      "title": "Executive Director, Clinical Pharmacology/Pharmacometrics · Recursion · Remote",
+      "summary": "Synthetic test description. Lead clinical pharmacology strategy across a portfolio of programmes.",
+      "date_published": "2026-11-18T11:30:56+00:00",
+      "tags": [
+        "remote",
+        "director"
+      ],
+      "_company": "Recursion",
+      "_location": "Remote",
+      "_jobposting": {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Executive Director, Clinical Pharmacology/Pharmacometrics",
+        "hiringOrganization": {
+          "@type": "Organization",
+          "name": "Recursion",
+          "@id": "https://biotechnologyjobs.co.uk/companies/recursion#org",
+          "url": "https://biotechnologyjobs.co.uk/companies/recursion",
+          "logo": "https://ftj-uploads.lon1.digitaloceanspaces.com/4931/recursion.jpg",
+          "sameAs": [
+            "https://www.recursion.com/",
+            "https://twitter.com/recursionpharma",
+            "https://www.linkedin.com/company/recursion/"
+          ]
+        },
+        "directApply": false,
+        "url": "https://biotechnologyjobs.co.uk/jobs/executive-director-clinical-pharmacologypharmacometrics-recursion-2",
+        "datePosted": "2026-11-18T11:30:56+00:00",
+        "identifier": {
+          "@type": "PropertyValue",
+          "name": "Recursion",
+          "value": "executive-director-clinical-pharmacologypharmacometrics-recursion-2"
+        },
+        "employmentType": "FULL_TIME",
+        "validThrough": "2026-12-21T13:00:10+00:00",
+        "description": "<p>Synthetic test description. Lead clinical pharmacology strategy across a portfolio of programmes.</p><p>Requirements: synthetic requirement text.</p>",
+        "dateModified": "2026-11-21T11:45:54+00:00",
+        "jobLocationType": "TELECOMMUTE",
+        "applicantLocationRequirements": {
+          "@type": "Country",
+          "name": "US"
+        },
+        "baseSalary": {
+          "@type": "MonetaryAmount",
+          "currency": "USD",
+          "value": {
+            "@type": "QuantitativeValue",
+            "unitText": "YEAR",
+            "minValue": 261800,
+            "maxValue": 346060
+          }
+        },
+        "industry": "Biotechnology"
+      }
+    }
+  ]
+}

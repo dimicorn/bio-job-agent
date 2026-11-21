@@ -1,4 +1,6 @@
 # Only reviewed commercial employers. Never add universities or general aggregators.
+# Exception: official life-sciences job board feeds (adapter jsonfeed), whose postings are
+# vetted one by one by the board filters (see docs/search.md).
 watchlist: ../firms.yaml
 sources:
   - id: mytos-lever
@@ -31,3 +33,15 @@ sources:
     review_url: https://job-boards.greenhouse.io/recursionpharmaceuticals
     enabled: false  # Verified feed, no London locations returned on 2026-11-15.
     min_interval_seconds: 900
+  # Official JSON Feed listed in robots.txt; CC BY 4.0. The board asks for at most one poll
+  # per hour. Each posting names its own employer; industry_verified reviews the board.
+  - id: biotechnologyjobs-jsonfeed
+    adapter: jsonfeed
+    board: https://biotechnologyjobs.co.uk/jobs.json
+    employer: Biotechnology Jobs
+    industry: biotech
+    industry_verified: true
+    employer_url: https://biotechnologyjobs.co.uk/
+    review_url: https://biotechnologyjobs.co.uk/feeds
+    enabled: true
+    min_interval_seconds: 3600
