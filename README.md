@@ -7,25 +7,25 @@ and helps you prepare and submit applications.
 
 ## Install and quick start
 
-Save your CV as `resume.pdf` in the repository root. Then, from your clone on
-macOS or Linux, run:
+From your clone on macOS or Linux (Python 3.12+, SQLite 3.24+ with JSON1):
 
-```sh
-./setup.sh
-```
+1. Save your CV as `resume.pdf` in the repository root.
+2. Run `./setup.sh`. It offers to install uv, installs the locked dependencies and
+   Chromium, initializes SQLite, and opens the wizard to configure and check your LLM.
+   If you choose an LLM CLI, install and sign in to it separately.
+3. If setup did not fill `resume.md` (for example, you added the PDF later), run
+   `uv run bio-jobs resume-from-pdf`.
+4. Check `resume.md` against your PDF, and set your job preferences under
+   `analyst.preferences` in `config.yaml`.
+5. Run `uv run bio-jobs extract-profile --force`.
+6. Review the facts, evidence and eligibility in `config/candidate.yaml`, correct any
+   errors, then set `reviewed: true`.
+7. Run `uv run bio-jobs doctor` and fix what it reports.
+8. Run `uv run bio-jobs scan`, then `uv run bio-jobs review`.
 
-Setup offers to install uv, installs the locked dependencies and Chromium, initializes
-SQLite, and opens the wizard to configure and check your LLM. The app requires
-Python 3.12+ and SQLite 3.24+ with JSON1. If you choose an LLM CLI, install and sign
-in to it separately. See [installation and candidate setup](docs/setup.md).
-
-1. Check the text that setup extracts into `resume.md`, or fill it from
-   [the example](resume.example.md).
-2. Set your job preferences under `analyst.preferences` in `config.yaml`.
-3. If setup did not extract your current profile, run
-   `uv run bio-jobs extract-profile --force`. Review the facts and evidence in
-   `config/candidate.yaml`, correct any errors, then set `reviewed: true`.
-   Run `uv run bio-jobs doctor` to check what still needs attention.
+`scan` refuses to score until the profile is reviewed. Jobs scoring below
+`apply.min_score` (default 80) in `config.yaml` are not applied to. See
+[installation and candidate setup](docs/setup.md).
 
 Profile extraction, scoring, and letter drafting send candidate data to your
 configured LLM. Discovery uses public sources without an LLM. Applications use

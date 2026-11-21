@@ -12,11 +12,17 @@ The script offers to install [uv](https://docs.astral.sh/uv/getting-started/inst
 
 Save your resume PDF as the gitignored `resume.pdf`: applications upload this file exactly as it is. Fill the gitignored `resume.md` from it (setup or `bio-jobs resume-from-pdf` extracts the text; check the result against the PDF), or by hand from [resume.example.md](../resume.example.md), and put job wishes in `analyst.preferences` in `config.yaml`. Extract a profile, review every fact and supporting excerpt in `config/candidate.yaml`, correct any errors, and only then set `reviewed: true`. Keep the generated `resume_hash`; editing the resume requires extraction and review again. The example asserts no candidate qualifications. Unreviewed profiles can explore discovery with `list --all-scores`, but cannot score jobs. `doctor` gives a reason for each check, including the `resume.md` status (missing, empty, example, unextracted or changed), and ends with the single most important next step.
 
+If you add `resume.pdf` after setup, or setup did not extract it, continue from the PDF:
+
 ```sh
-uv run bio-jobs doctor
+uv run bio-jobs resume-from-pdf          # fill resume.md, then check it against the PDF
 uv run bio-jobs extract-profile --force
-# Review config/candidate.yaml and set reviewed: true before continuing.
+# Review config/candidate.yaml (facts, evidence, eligibility) and set reviewed: true.
+uv run bio-jobs doctor
+uv run bio-jobs scan
 ```
+
+Until `reviewed: true` is set, `scan` stops with "Scoring requires factual review". Listing and review show jobs scoring at least `analyst.min_score` (default 50); preparing or submitting an application also requires `apply.min_score` (default 80), so lower-scoring jobs are not applied to unless you override them in `review --all-scores`.
 
 `bio-jobs` or `bio-jobs help` shows commands without network access. On the first operational run without `config.yaml`, the wizard opens automatically in a terminal; noninteractive runs print a setup instruction. Discovery does not call an LLM. Profile extraction and scoring send candidate facts and job text to the configured LLM; setup, `llm-check`, and `doctor --online` send small connection checks. Install and authenticate the CLI you select (OpenCode, Pi, Codex or Claude Code); the script does not install those applications.
 
