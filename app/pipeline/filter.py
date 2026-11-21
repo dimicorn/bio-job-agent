@@ -107,14 +107,21 @@ def geography(job: Posting, profile: CandidateProfile) -> str:
 
 
 def exclusion(job: Posting, source: SourceConfig, profile: CandidateProfile) -> str | None:
+    reasons = exclusions(job, profile, industry_verified=source.industry_verified)
+    return reasons[0] if reasons else None
+
+
+def exclusions(job: Posting, profile: CandidateProfile, *, industry_verified: bool) -> list[str]:
+    """Every discovery filter that excludes this job, in precedence order."""
+    reasons = []
     employer = key(job.employer)
     title = key(job.title)
-    if not source.industry_verified:
-        return "unverified_industry"
+    if not industry_verified:
+        reasons.append("unverified_industry")
     if any(
         contains(employer, x) for x in ("university", "college", "institute of", "nhs", "hospital")
     ):
-        return "academic_employer"
+        reasons.append("academic_employer")
     if any(
         contains(title, x)
         for x in (
@@ -132,7 +139,7 @@ def exclusion(job: Posting, source: SourceConfig, profile: CandidateProfile) -> 
             "business development",
         )
     ):
-        return "excluded_role"
+        reasons.append("excluded_role")
     # Match title tokens in any order (e.g. Principal PD/MSAT Scientist).
     target_match = any(
         all(contains(title, token) for token in key(t).split())
@@ -163,8 +170,8 @@ def exclusion(job: Posting, source: SourceConfig, profile: CandidateProfile) -> 
         contains(title, x) for x in ("scientist", "scientific", "research investigator")
     )
     if profile.target_titles and not target_match and (known_level or not scientific_role):
-        return "seniority_or_role"
+        reasons.append("seniority_or_role")
     geo = geography(job, profile)
     if geo == "outside" or (geo == "unknown" and not profile.include_unknown_location):
-        return "geography"
-    return None
+        reasons.append("geography")
+    return reasons

@@ -161,7 +161,7 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
                     warn=True,
                 )
                 conn.row_factory = sqlite3.Row
-                for row in conn.execute("SELECT * FROM sources ORDER BY id"):
+                for row in conn.execute("SELECT * FROM sources WHERE adapter!='link' ORDER BY id"):
                     report(
                         f"Source {row[0]}",
                         row["health"] in ("ok", "partial"),

@@ -37,7 +37,7 @@ uv run bio-jobs review   # a prepares any missing letter, CV and answers, then a
 
 `scan` refreshes every enabled source and scores new or changed eligible jobs; `sync` only refreshes and `analyze` only scores stored jobs. Discovery itself does not call an LLM or use a browser.
 
-`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--since YYYY-MM-DD`, `--status`, `--application-state`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs and applications in progress remain in the default review queue, even when unscored; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
+`list`, `review` and `export` accept `--title`, `--employer`, `--location`, `--source`, `--job`, `--since YYYY-MM-DD`, `--status`, `--application-state`, `--limit` and `--all-scores`. They honour `analyst.min_score` (default 50); unscored jobs are hidden by that gate. `--all-scores` includes low/unscored jobs for inspection and overrides; setting `min_score: 0` disables the gate. Rejected jobs are hidden unless selected with `--status rejected` or `--status all`. Saved jobs and applications in progress remain in the default review queue, even when unscored; deferred jobs return next time. Decisions and overrides persist across refreshes and rescoring. List/review default to 50 rows; export includes all matching jobs unless limited. Equal scores sort by discovery date and ID.
 
 Scores use configurable weights: specialization 30, technical 20, seniority/leadership 15, industry/therapeutic area 10, geography 10, research outcomes 10, salary/arrangements 5. Weights must sum to 100. The LLM supplies dimension ratings with evidence; the application computes the total (nearest integer, halves up). An unknown dimension contributes neutral 50 and always carries an uncertainty flag. Missing qualifications mean an **unknown** must-have, never an unmet requirement; unmet requires explicit candidate evidence. Recommendations follow score bands: apply ≥70, maybe ≥50, skip <50. Confidence remains separate from score; even a high score can need factual checks. Model judgments still require human review.
 
@@ -58,6 +58,17 @@ Scoring failures identify the job, backend, model, safe validation paths or fail
 category, and a next step in command output and `stats`. Failed batches are split once;
 invalid single-job answers receive one repair attempt and may use the configured
 fallback. Cut-off answers may also use that fallback without a quota cooldown.
+
+### Add one job by link
+
+```sh
+uv run bio-jobs add https://job-boards.greenhouse.io/<board>/jobs/<id>
+uv run bio-jobs add https://careers.example.com/jobs/senior-scientist --employer "Example Bio"
+```
+
+`add` stores one posting you found yourself. Greenhouse (`boards.greenhouse.io`, `job-boards.greenhouse.io`, embedded `job_app?for=…&token=…`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`) and Workable (`apply.workable.com/<account>/j/<code>`, `<account>.workable.com/j/<code>`) links are read through the same public APIs and adapters as discovery; Ashby and Workable have no single-posting API, so their public board is read once. Any other https page is fetched once (GET only, robots.txt, pacing and timeouts as discovery, no redirects followed) and reduced to plain text: job markup (`JobPosting`) when present, otherwise the page title, heading and main text. Page content is untrusted data and is never followed or executed. `--employer` names the employer when the page or ATS does not.
+
+The job is stored with an origin marked as added by link (source `link-<employer>`), deduplicated against stored jobs, scored when the profile is reviewed, and the command prints its job ID, score and `uv run bio-jobs review --job <ID>`. The employer need not be on the watchlist. When the industry (not on the reviewed watchlist), role, seniority, geography or freshness filter would normally exclude it, the job is still stored, `add`, `list` and `review` say which filters apply, and it stays in review (bypassing the score gate) for you to save or reject. Adding the same link again, or a link to a job already stored, reports the existing job without fetching. A probable duplicate of a stored job joins it as another origin. Failures (unreachable page, robots.txt disallow, HTTP errors, redirects, no job text) print a plain message and a next step. Jobs added by link are not expired by later syncs; reject them in review when they close.
 
 ### Fresh postings
 
@@ -111,6 +122,7 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `doctor [--online]` | Local setup, resume and source health with a reason per check and one next step; opt in to live LLM checks |
 | `firms [--validate]` | List the reviewed employer watchlist; explicitly reverify public boards with `--validate` |
 | `sync` | Explicit public ATS refresh with persistent cooldowns |
+| `add <url> [--employer NAME]` | Add one job by link (Greenhouse, Lever, Ashby, Workable or any job page), score it and print the review command |
 | `extract-profile [--output path] [--force]` | Extract resume facts and an evidenced header name into an unreviewed YAML profile; retains edited names and title/geography preferences; refuses replacement without `--force` |
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
