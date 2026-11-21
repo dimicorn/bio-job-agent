@@ -166,6 +166,19 @@ def collect(cfg: Settings, *, online=False) -> tuple[list[tuple[str, str, str]],
             f"daily_limit={a.daily_limit}, max_per_run={a.max_per_run}, min_score={a.min_score}, "
             f"active_hours={a.active_hours} (local time)",
         )
+        from app.autopilot import browser_choice
+        from app.materials import chromium_path
+
+        executable, name = browser_choice(configured, chromium_path)
+        browser_mode = a.mode in ("assisted", "auto", "dry_run")
+        report(
+            "Apply browser",
+            bool(executable),
+            f"{name} ({executable}); profile {configured.resolved(a.profile_dir)}",
+            "No browser for assisted/auto/dry_run: install Google Chrome or run "
+            "uv run playwright install chromium",
+            warn=not browser_mode,
+        )
     path = cfg.resolved(cfg.database_path)
     if path.exists():
         try:

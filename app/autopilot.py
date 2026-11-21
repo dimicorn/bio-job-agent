@@ -2,7 +2,10 @@
 
 import fcntl
 import json
+import re
+import shutil
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -57,12 +60,14 @@ def reserve(cfg, conn, profile, row, mode, used=0, now=None, *, unattended=None)
         if not current or current[0] != "approved":
             raise ValueError("Only approved jobs can be applied")
         if conn.execute(
-            "SELECT 1 FROM application_attempts WHERE job_id=? AND "
+            "SELECT 1 FROM application_attempts WHERE job_id=? AND mode != 'dry_run' AND "
             "(submission_possible=1 OR status='started')",
             (row["id"],),
         ).fetchone():
             raise ValueError("A prior attempt may have submitted; never retry automatically")
-        applications.check_gates(cfg, conn, row, used=used, now=now, unattended=unattended)
+        applications.check_gates(
+            cfg, conn, row, used=used, now=now, unattended=unattended, dry_run=mode == "dry_run"
+        )
         applications.check_company(cfg, conn, row, now=now)
         attempt = conn.execute(
             "INSERT INTO application_attempts(job_id,mode,started_at) VALUES (?,?,?)",
@@ -113,6 +118,14 @@ def finish(conn, row, attempt, status, reason):
     return status
 
 
+def finish_dry_run(conn, row, attempt, status, reason):
+    """Close a dry-run attempt; the application state (approved) is left unchanged."""
+    conn.execute("UPDATE application_attempts SET status=? WHERE id=?", (status, attempt))
+    conn.commit()
+    event(conn, row["id"], attempt, "result", status=status, reason=reason)
+    return status
+
+
 def values_for(cfg, conn, profile, ids):
     from app.candidate.profile import require_name
     from app.contact import contact_values
@@ -132,8 +145,8 @@ def values_for(cfg, conn, profile, ids):
     }, versions
 
 
-def screenshot(page, cfg, row, attempt, name, log):
-    directory = cfg.resolved(cfg.apply.audit_dir)
+def screenshot(page, cfg, row, attempt, name, log, directory=None):
+    directory = directory or cfg.resolved(cfg.apply.audit_dir)
     private_dir(directory)
     path = directory / f"{row['id']}-{attempt}-{name}.png"
     private_file(path)
@@ -144,8 +157,11 @@ def screenshot(page, cfg, row, attempt, name, log):
 
 def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, unattended=None):
     mode = cfg.apply.mode
-    if mode not in ("assisted", "auto"):
-        raise ValueError("Browser application requires assisted or auto mode")
+    if mode not in ("assisted", "auto", "dry_run"):
+        raise ValueError("Browser application requires assisted, auto or dry_run mode")
+    dry = mode == "dry_run"
+    # Dry-run screenshots go with the job's other private materials.
+    shots = cfg.resolved(cfg.materials_path) / str(row["id"]) if dry else None
     if unattended is None:
         unattended = mode == "auto"
     attempt, bank, ids = reserve(cfg, conn, profile, row, mode, used, now, unattended=unattended)
@@ -223,10 +239,11 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
                 applier.fill_one(step)
             for step in steps:
                 applier.verify_one(step)
-            output(str(deferred) + "; leave these questions for the person in the browser.")
+            if not dry:
+                output(str(deferred) + "; leave these questions for the person in the browser.")
             raise deferred
         applier.fill(steps)
-        screenshot(page, cfg, row, attempt, "filled", log)
+        shot = screenshot(page, cfg, row, attempt, "dry-run" if dry else "filled", log, shots)
         # Re-read immediately before handoff/click, after asynchronous file parsing and screenshots.
         applier.verify(steps)
         for kind, version in versions.items():
@@ -246,10 +263,25 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
         if current[0] != "approved":
             raise FormStop("Approval was withdrawn while filling")
         applications.check_gates(
-            cfg, conn, row, used=used, now=now, exclude_attempt=attempt, unattended=unattended
+            cfg,
+            conn,
+            row,
+            used=used,
+            now=now,
+            exclude_attempt=attempt,
+            unattended=unattended,
+            dry_run=dry,
         )
         applications.check_company(cfg, conn, row, now=now)
         button = applier.submit_button()
+        if dry:
+            output(
+                f"{row['id']}: Dry run: form filled and verified; Submit was not pressed. "
+                f"Screenshot: {shot}"
+            )
+            return finish_dry_run(
+                conn, row, attempt, "dry_run", "Filled and verified; not submitted"
+            )
         arm(cfg, conn, row, attempt, mode, now)
         possible = True
         if mode == "assisted":
@@ -321,27 +353,72 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=print, 
         reason = f"{type(exc).__name__}: browser/material action failed; inspect audit events"
         log("error", reason=reason, detail=str(exc)[:1000], submission_possible=possible)
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            finish(conn, row, attempt, status, reason)
+            if dry:
+                finish_dry_run(conn, row, attempt, "dry_run_stopped", reason)
+            else:
+                finish(conn, row, attempt, status, reason)
             raise
+    shot = None
     try:
         if page is not None:
-            screenshot(page, cfg, row, attempt, "stopped", log)
+            shot = screenshot(page, cfg, row, attempt, "stopped", log, shots)
     except (PlaywrightError, OSError) as exc:
         log("screenshot_failed", stage="stopped", error=type(exc).__name__)
+    if dry:
+        output(
+            f"{row['id']}: dry run stopped: {reason}. Nothing was submitted; the job stays "
+            "approved." + (f" Screenshot: {shot}" if shot else "")
+        )
+        return finish_dry_run(conn, row, attempt, "dry_run_stopped", reason)
     output(f"{row['id']}: {status}: {reason}. Browser left for manual handling.")
     return finish(conn, row, attempt, status, reason)
 
 
-class Browser:
-    """An ordinary persistent Chromium; disconnect leaves handoff windows open.
+def chrome_path():
+    """The installed Google Chrome, or None."""
+    if sys.platform == "darwin":
+        app = "Google Chrome.app/Contents/MacOS/Google Chrome"
+        candidates = [Path("/Applications") / app, Path.home() / "Applications" / app]
+    else:
+        candidates = [Path("/opt/google/chrome/chrome")] + [
+            Path(found)
+            for name in ("google-chrome", "google-chrome-stable")
+            if (found := shutil.which(name))
+        ]
+    return next((str(p) for p in candidates if p.is_file()), None)
 
-    Chromium is an independent local process so an assisted timeout does not close the form.
-    The loopback CDP endpoint is used only by Playwright, with no stealth flags/plugins.
+
+def browser_choice(cfg, chromium):
+    """(executable or None, description) for apply.browser_channel; chromium() gives Playwright's."""
+    if cfg.apply.browser_channel == "chrome":
+        if path := chrome_path():
+            return path, "Google Chrome"
+        note = "Google Chrome is not installed; using Playwright Chromium instead"
+    else:
+        note = "Playwright Chromium"
+    path = chromium()
+    return (path if path and Path(path).exists() else None), note
+
+
+# Playwright's own launch adds --enable-automation; this launch never does. The Blink
+# switch keeps navigator.webdriver unset, which the remote debugging port would otherwise set.
+BROWSER_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-first-run",
+    "--no-default-browser-check",
+]
+
+
+class Browser:
+    """The installed Chrome (or Playwright Chromium) on a private persistent profile.
+
+    The browser is an independent local process so an assisted timeout does not close the form;
+    disconnect leaves handoff windows open. The loopback CDP endpoint is used only by Playwright.
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, output=print):
         self.cfg, self.pw, self.browser, self.lock = cfg, None, None, None
-        self.reused, self.tab = False, None
+        self.reused, self.tab, self.output = False, None, output
 
     def page(self):
         from playwright.sync_api import sync_playwright
@@ -373,9 +450,14 @@ class Browser:
         self.reused = bool(address)
         if not address:
             port_file.unlink(missing_ok=True)
-            executable = self.pw.chromium.executable_path
-            if not Path(executable).exists():
-                raise ValueError("Install Chromium: uv run playwright install chromium")
+            executable, name = browser_choice(self.cfg, lambda: self.pw.chromium.executable_path)
+            if not executable:
+                raise ValueError(
+                    "No browser for applications: install Google Chrome "
+                    "or run uv run playwright install chromium"
+                )
+            if self.cfg.apply.browser_channel == "chrome" and name != "Google Chrome":
+                self.output(name + ".")
             with private_open(profile / "browser.log", "ab") as log:
                 subprocess.Popen(
                     [
@@ -383,6 +465,7 @@ class Browser:
                         f"--user-data-dir={profile}",
                         "--remote-debugging-port=0",
                         "--remote-debugging-address=127.0.0.1",
+                        *BROWSER_ARGS,
                         "about:blank",
                     ],
                     stdin=subprocess.DEVNULL,
@@ -395,7 +478,9 @@ class Browser:
                 time.sleep(0.1)
                 address = endpoint()
             if not address:
-                raise ValueError("Chromium did not open; inspect browser.log in apply.profile_dir")
+                raise ValueError(
+                    "The browser did not open; inspect browser.log in apply.profile_dir"
+                )
         self.browser = self.pw.chromium.connect_over_cdp(address)
         context = self.browser.contexts[0]
         # Never navigate a previous handoff tab away. Every attempt has a separate tab.
@@ -445,9 +530,12 @@ def run(
     selected.sort(key=lambda r: r.get("score") if r.get("score") is not None else -1, reverse=True)
     outcomes = []
     employers = set()
+    # Dry runs never submit, so they use no per-run or daily slots and close every form.
+    dry = cfg.apply.mode == "dry_run"
     try:
         for row in selected:
-            if len(outcomes) >= cfg.apply.max_per_run:
+            used = 0 if dry else len(outcomes)
+            if used >= cfg.apply.max_per_run:
                 break
             employer = key(row["employer"])
             if employer in employers:
@@ -458,7 +546,9 @@ def run(
                         f"Job {row['id']} is closed; verify it manually before applying"
                     )
                 applications.check_company(cfg, conn, row)
-                applications.check_gates(cfg, conn, row, used=len(outcomes), unattended=unattended)
+                applications.check_gates(
+                    cfg, conn, row, used=used, unattended=unattended, dry_run=dry
+                )
             except ValueError as exc:
                 if job:
                     raise
@@ -492,7 +582,7 @@ def run(
                 )
                 outcomes.append("manual")
                 continue
-            browser = browser_factory(cfg)
+            browser = browser_factory(cfg, output=output)
             status = None
             try:
                 status = apply_one(
@@ -501,7 +591,7 @@ def run(
                     profile,
                     row,
                     browser.page,
-                    used=len(outcomes),
+                    used=used,
                     output=output,
                     unattended=unattended,
                 )
@@ -513,9 +603,9 @@ def run(
                 output(str(exc))
                 break
             finally:
-                browser.close(leave_open=status != "submitted")
+                browser.close(leave_open=not dry and status != "submitted")
             output(f"{row['id']}: {status}")
-            if status != "submitted":
+            if not dry and status != "submitted":
                 # Preserve the current form for a person; do not open more application windows.
                 break
     except KeyboardInterrupt:
@@ -535,7 +625,14 @@ def run(
         )
         raise
 
-    output(
-        f"Apply pass: {len(outcomes)} attempted, {outcomes.count('submitted')} confirmed submitted."
-    )
+    if dry:
+        output(
+            f"Dry run pass: {len(outcomes)} tried, {outcomes.count('dry_run')} filled and "
+            "verified; nothing was submitted."
+        )
+    else:
+        output(
+            f"Apply pass: {len(outcomes)} attempted, "
+            f"{outcomes.count('submitted')} confirmed submitted."
+        )
     return outcomes
