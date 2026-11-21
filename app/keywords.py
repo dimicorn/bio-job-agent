@@ -11,7 +11,7 @@ import unicodedata
 
 from app.resume import digest
 
-KEYWORD_VERSION = "keywords-v1"
+KEYWORD_VERSION = "keywords-v2"
 
 # Canonical name -> spellings. Spellings are normalised like the texts (lower case,
 # hyphens and slashes as spaces, British spellings folded), so "scRNA-seq" also
@@ -92,6 +92,26 @@ VOCABULARY: dict[str, list[str]] = {
     "genomics": ["genomic"],
     "epigenetics": ["epigenetic", "epigenomic", "dna methylation"],
     "multi-omics": ["multi omic", "multiomic"],
+    "genetics": ["genetics", "human genetics", "population genetics"],
+    "statistical genetics": [
+        "statistical genetic",
+        "gwas",
+        "genome wide association",
+        "fine mapping",
+        "colocalization",
+        "mendelian randomization",
+        "polygenic risk score",
+        "heritability",
+    ],
+    "QTL mapping": [
+        "qtl",
+        "eqtl",
+        "pqtl",
+        "sqtl",
+        "quantitative trait loci",
+        "quantitative trait locus",
+    ],
+    "molecular biology": ["molecular biology", "molecular biologist"],
     # Computational
     "bioinformatics": ["bioinformatic"],
     "computational biology": ["computational biology", "computational biologist"],
@@ -99,10 +119,14 @@ VOCABULARY: dict[str, list[str]] = {
     "R": ["r programming", "r bioconductor", "bioconductor", "tidyverse", "rstudio", "r shiny"],
     "SQL": ["sql"],
     "Linux/HPC": ["linux", "unix", "hpc", "high performance computing", "slurm"],
-    "Nextflow/Snakemake": ["nextflow", "snakemake", "workflow manager"],
+    "Nextflow/Snakemake": ["nextflow", "snakemake", "workflow manager", "wdl", "cromwell"],
     "cloud computing": ["aws", "gcp", "google cloud", "azure", "cloud computing"],
     "machine learning": ["machine learning", "deep learning", "ml", "ai", "neural network"],
-    "statistics": ["statistic", "biostatistic", "statistical analysis"],
+    "statistics": ["statistic", "biostatistic", "statistical analysis", "regression"],
+    "Bayesian methods": ["bayesian"],
+    "causal inference": ["causal inference"],
+    "Git": ["git", "github", "gitlab", "version control"],
+    "containers": ["docker", "containerization", "singularity", "kubernetes"],
     "data analysis": ["data analysis", "data analytic"],
     "cheminformatics": ["cheminformatic", "rdkit"],
     "molecular modeling": ["molecular modeling", "molecular dynamics", "docking", "cadd"],
@@ -401,12 +425,22 @@ STOP_ACRONYMS = {
     ],
 }
 
+_EMPLOYER_SUFFIX = re.compile(
+    r"(?:[\s,]+(?:ltd|limited|llc|inc|plc|gmbh|ag|sa|bv|nv|co|corp|corporation|group|holdings"
+    r"|labs?|laboratories|therapeutics|bio|biosciences?|biotech(?:nology)?|pharma(?:ceuticals?)?"
+    r"|technologies|sciences?|uk|us|usa)\.?)+$",
+    re.IGNORECASE,
+)
+_WORK_MODES = {"remote", "hybrid", "on site", "onsite", "on-site", "office", "flexible"}
+
 # Headings in collapsed job text: boilerplate starts, job content resumes.
 _BOILERPLATE_HEADING = re.compile(
     r"\b(?:what we offer|what we can offer|what's in it for you|why join(?: us)?|why work (?:for|with) us"
     r"|our offer|(?:our |the )?benefits(?: package)?\s*(?::|include|we offer)|perks\s*(?::|include)"
     r"|equal (?:employment )?opportunit|eeo statement|diversity,? (?:equity,? )?(?:and|&) inclusion"
-    r"|privacy (?:notice|policy)|to (?:all )?recruitment agencies|recruiters? and agencies)",
+    r"|privacy (?:notice|policy)|to (?:all )?recruitment agencies|recruiters? and agencies"
+    r"|your (?:package|rewards?)|compensation (?:and|&) (?:benefits|growth)|ready to (?:build|join|apply)"
+    r"|life at \w+|our (?:culture|values)\s*:)",
     re.IGNORECASE,
 )
 _CONTENT_HEADING = re.compile(
@@ -415,13 +449,17 @@ _CONTENT_HEADING = re.compile(
     r"|(?:essential |key |minimum |preferred |desirable )?(?:requirements|qualifications)"
     r"|about you|who you are|you(?:'ll| will) have|skills (?:and|&) experience"
     r"|experience (?:and|&) skills|essential\s*:|desirable\s*:|nice to have|preferred\s*:"
-    r"|in this role|you will be|the successful candidate)",
+    r"|in this role|you will be (?:responsible|expected)|the successful candidate|role purpose|purpose of the role"
+    r"|your (?:impact|role|responsibilities)|a day in the life|(?:it'?s|it’s) a bonus if"
+    r"|you(?:'ll|’ll| will) bring|what (?:we'?re|we’re|we are) looking for)",
     re.IGNORECASE,
 )
 # Company blurb headings: skipped only up to a later content heading, since a blurb often
 # opens the text and runs straight into the job with no heading of its own.
 _BLURB_HEADING = re.compile(
-    r"\b(?:about us\b|about the company|about the organi[sz]ation|who we are|our company|our mission)",
+    r"\b(?:about us\b|about the company|about the organi[sz]ation|who we are|our company|our mission"
+    r"|the mission\b|why we exist|our story|our (?:culture|values)\b"
+    r"|about the (?:[A-Z][\w&-]* ){1,4}(?:team|group|function|department)\b)",
     re.IGNORECASE,
 )
 # Single boilerplate sentences that can sit anywhere in the text.
@@ -435,7 +473,8 @@ _BOILERPLATE_SENTENCE = re.compile(
     r"|wellbeing|well being|gym|flexible working|hybrid working|free (?:lunch|breakfast|snacks)"
     r"|privacy|personal data|gdpr|recruitment agenc|unsolicited|right to work|visa sponsorship"
     r"|founded in|headquartered|backed by|series [a-e]\b|raised \$|venture capital"
-    r"|award[- ]winning|great place to work|join (?:us|our team) (?:in|on|as))",
+    r"|award[- ]winning|great place to work|join (?:us|our team) (?:in|on|as)"
+    r"|^\s*(?:job )?locations?\s*:|apply now)",
     re.IGNORECASE,
 )
 
@@ -513,9 +552,56 @@ def _part_of_term(text: str, match: re.Match) -> bool:
     return False
 
 
-def job_text(title: str, description: str, requirements: str | None = None) -> str:
-    """Job content without benefits, EEO, privacy and company-blurb text."""
-    raw = " ".join(x for x in (title, description, requirements or "") if x)
+def _variants(employer: str) -> list[str]:
+    """The employer's name and its obvious variants: without legal forms or a sector word."""
+    name = re.sub(r"\s+", " ", employer or "").strip(" ,.")
+    if not name:
+        return []
+    out = {name}
+    short = re.sub(_EMPLOYER_SUFFIX, "", name).strip(" ,.")
+    if short and len(short) > 2:
+        out.add(short)
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    if len(words) > 1:
+        out.add("".join(w[0] for w in words).upper())  # "Isomorphic Labs" -> "IL"
+    return sorted(out, key=len, reverse=True)
+
+
+def _place_names(location: str) -> list[str]:
+    """Locations of the job and their abbreviations ("Research Triangle Park" -> "RTP")."""
+    out = set()
+    for part in re.split(r"[;,/|()]|\s+or\s+|\s+and\s+", location or ""):
+        part = part.strip(" .-")
+        if len(part) < 2 or part.casefold() in _WORK_MODES:
+            continue
+        out.add(part)
+        words = re.findall(r"[A-Za-z]+", part)
+        if len(words) > 1:
+            out.add("".join(w[0] for w in words).upper())
+    return sorted(out, key=len, reverse=True)
+
+
+def _without(text: str, names: list[str]) -> str:
+    for name in names:
+        text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(name)}(?:[’']s)?(?![A-Za-z0-9])", " ", text)
+    return text
+
+
+def job_text(
+    title: str,
+    description: str,
+    requirements: str | None = None,
+    *,
+    employer: str = "",
+    location: str = "",
+) -> str:
+    """Job content without benefits, EEO, privacy and company-blurb text.
+
+    The employer's name and the job's places are removed from the description: they describe
+    the company and the office, not a skill ("Genomics" the employer, "RTP" the site).
+    """
+    raw = " ".join(x for x in (description, requirements or "") if x)
+    names = _variants(employer)
     content = [m.start() for m in _CONTENT_HEADING.finditer(raw)]
     marks = sorted(
         [(m.start(), False) for m in _BOILERPLATE_HEADING.finditer(raw)]
@@ -526,15 +612,30 @@ def job_text(title: str, description: str, requirements: str | None = None) -> s
             if any(x > m.start() for x in content)
         ]
     )
+    # Text before the first content heading that names the employer is the company blurb.
+    if (
+        content
+        and content[0] > 0
+        and names
+        and _without(raw[: content[0]], names) != raw[: content[0]]
+    ):
+        marks.append((0, False))
+        marks.sort()
     kept, start, keep = [], 0, True
-    for position, content in marks:
+    for position, content_mark in marks:
         if keep:
             kept.append(raw[start:position])
-        start, keep = position, content
+        start, keep = position, content_mark
     if keep:
         kept.append(raw[start:])
-    sentences = re.split(r"(?<=[.!?;•·])\s+|\s+[•·▪◦]\s*|\n+", " ".join(kept))
-    return " ".join(s for s in sentences if s.strip() and not _BOILERPLATE_SENTENCE.search(s))
+    # Each heading starts a sentence. Bullets collapsed into " - " or "• " separators are sentences of their own, so one
+    # benefits line cannot drop a whole requirements list.
+    sentences = re.split(
+        r"(?<=[.!?;•·])\s+|\s+[•·▪◦]\s*|\s+[-–—]\s+(?=[A-Z(])|\n+", "\n".join(kept)
+    )
+    body = " ".join(s for s in sentences if s.strip() and not _BOILERPLATE_SENTENCE.search(s))
+    body = _without(body, names + _place_names(location))
+    return " ".join(x for x in (title, re.sub(r"\s+", " ", body).strip()) if x)
 
 
 def _find(name: str, text: str, folded: str) -> list[tuple[int, int, str]]:
@@ -556,12 +657,13 @@ def keyword_match(
     *,
     requirements: str | None = None,
     employer: str = "",
+    location: str = "",
 ) -> dict | None:
     """{score, present, missing, total} over job keywords, or None when none were found.
 
     present/missing are ordered by how often the job mentions them, then first mention.
     """
-    text = job_text(title, description, requirements)
+    text = job_text(title, description, requirements, employer=employer, location=location)
     folded = normalize(text)
     found = {}
     for name in VOCABULARY:
@@ -587,6 +689,7 @@ def keyword_match(
         if alone:
             terms[name] = (len(alone), min(s[0] for s in alone))
     employer_words = {w.casefold() for w in re.findall(r"[A-Za-z0-9]+", employer or "")}
+    employer_words |= {n.casefold() for n in _variants(employer) + _place_names(location)}
     for match in _ACRONYM.finditer(text):
         word = match.group(1)
         letters = sum(c.isalpha() for c in word)
@@ -625,7 +728,9 @@ def match_hash(row: dict, resume: str) -> str:
     return digest(
         {
             "version": KEYWORD_VERSION,
-            "job": [row.get(k) for k in ("title", "employer", "description", "requirements")],
+            "job": [
+                row.get(k) for k in ("title", "employer", "location", "description", "requirements")
+            ],
             "resume": resume,
         }
     )
@@ -658,6 +763,7 @@ def attach_keyword_matches(conn, cfg, rows):
             resume,
             requirements=row.get("requirements"),
             employer=row.get("employer") or "",
+            location=row.get("location") or "",
         )
         conn.execute(
             """INSERT INTO keyword_matches(job_id,content_hash,payload) VALUES (?,?,?)

@@ -175,3 +175,82 @@ def test_cache_reuses_and_recomputes_on_job_or_resume_change(conn, tmp_path, mon
     attach_keyword_matches(conn, cfg, [changed])
     assert calls == [1, 1] and changed["keywords"]["missing"] == ["SPR"]
     assert conn.execute("SELECT count(*) FROM keyword_matches").fetchone()[0] == 1
+
+
+# A collapsed Ashby-style posting: bullets joined by " - ", a mission blurb naming the
+# employer, office locations with an abbreviation, and a benefits list.
+ASHBY = (
+    "Location: Cambridge, Boston or RTP (Hybrid) The Mission: Why We Exist Examplomics is a "
+    "techbio using genomics and machine learning to accelerate drug discovery. Examplomics "
+    "aims to help people live longer. Role Purpose You will turn genetic associations into "
+    "targets. A Day in the Life - Prioritising causal genes with fine-mapping and eQTL "
+    "colocalisation - Mining single-cell and proteomic datasets Who You Are - A PhD in a "
+    "quantitative discipline - Statistical programming in Python or R It's a bonus if you "
+    "have: - GWAS experience - Pipelines in Snakemake or Nextflow - Git and Docker "
+    "Your Package - Competitive salary and bonus - Pension and private health insurance "
+    "- Hybrid working from our Cambridge office. Examplomics is an equal-opportunity employer."
+)
+ASHBY_ARGS = {
+    "employer": "Examplomics Ltd",
+    "location": "Cambridge; Boston; Research Triangle Park",
+}
+
+
+def found(result):
+    return set(result["present"]) | set(result["missing"])
+
+
+def test_employer_name_and_locations_are_not_keywords():
+    result = keyword_match("Scientist - Target Genetics", ASHBY, "", **ASHBY_ARGS)
+    terms = found(result)
+    assert "RTP" not in terms and "Examplomics" not in terms
+    # "genomics", "machine learning" and "drug discovery" only appear in the mission blurb.
+    assert not {"genomics", "machine learning", "drug discovery"} & terms
+    text = job_text("T", ASHBY, **ASHBY_ARGS)
+    assert "Examplomics" not in text and "Cambridge" not in text and "RTP" not in text
+
+
+def test_bulleted_requirements_survive_a_benefits_word():
+    # The whole " - " list used to be one sentence, dropped for "bonus" and "salary".
+    result = keyword_match("Scientist", ASHBY, "", **ASHBY_ARGS)
+    assert {
+        "statistical genetics",
+        "QTL mapping",
+        "proteomics",
+        "PhD",
+        "Python",
+        "Nextflow/Snakemake",
+        "Git",
+        "containers",
+    } <= found(result)
+    assert result["total"] == 8
+    text = job_text("T", ASHBY, **ASHBY_ARGS)
+    assert "Pension" not in text and "salary" not in text and "equal-opportunity" not in text
+
+
+def test_employer_variants_and_location_initials():
+    job = (
+        "Isoexample Labs builds AI for drug discovery. Responsibilities: run ELISA at our "
+        "South San Francisco site (SSF) with the IL platform team and Isoexample's chemists."
+    )
+    result = keyword_match(
+        "Scientist", job, "", employer="Isoexample Labs", location="South San Francisco"
+    )
+    assert result["missing"] == ["ELISA"]
+
+
+def test_leading_text_without_the_employer_name_is_kept():
+    job = "You will run qPCR daily. Requirements: ELISA."
+    result = keyword_match("Scientist", job, "", employer="Examplomics")
+    assert set(result["missing"]) == {"qPCR", "ELISA"}
+
+
+def test_cache_recomputes_when_the_location_changes(conn, tmp_path):
+    cfg = Settings(_env_file=None, resume_path=tmp_path / "resume.md")
+    cfg.resume_path.write_text("ELISA", encoding="utf-8")
+    row = dict(_job(conn, "Requirements: ELISA at RTP."), location="")
+    attach_keyword_matches(conn, cfg, [row])
+    assert "RTP" in row["keywords"]["missing"]
+    moved = dict(row, location="Research Triangle Park")
+    attach_keyword_matches(conn, cfg, [moved])
+    assert moved["keywords"]["missing"] == []
