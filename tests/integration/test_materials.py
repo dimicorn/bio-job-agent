@@ -9,17 +9,18 @@ import yaml
 from rich.console import Console
 
 from app import answers, applications, cli, materials, resume
-from app.candidate.profile import Fact, import_profile
+from app.candidate.profile import Fact
 from app.pipeline.discover import discover
 from app.settings import Analyst, Apply, Settings
 from app.store import list_jobs, review_job
 
 
 @pytest.fixture
-def preparation(tmp_path, conn, profile, sources, transport):
+def preparation(tmp_path, conn, profile, sources, transport, make_pdf):
     cfg = Settings(
         _env_file=None,
         resume_path=tmp_path / "resume.md",
+        resume_pdf_path=tmp_path / "resume.pdf",
         materials_path=tmp_path / "materials",
         llm_state_dir=tmp_path,
         env_path=tmp_path / ".env",
@@ -31,6 +32,15 @@ def preparation(tmp_path, conn, profile, sources, transport):
     )
     cfg.resume_path.write_text(
         "# Alex Example\nalex@example.org\n\n## Experience\nDeveloped cell assays.\n\n## Skills\nPython analysis.\n\n## Education\nBSc at Example University.\n"
+    )
+    make_pdf(
+        cfg.resume_pdf_path,
+        [
+            ("Alex Example", 18, 40, 50),
+            ("alex@example.org", 10, 40, 70),
+            ("Experience", 12, 40, 100),
+            ("Developed cell assays.", 10, 40, 118),
+        ],
     )
     profile.name = "Alex Example"
     profile.reviewed = True
@@ -160,7 +170,7 @@ def test_unreviewed_or_changed_resume_blocks_generation(preparation, conn):
     cfg, profile, rows = preparation
     profile.reviewed = False
     with pytest.raises(ValueError, match="review"):
-        materials.tailored_resume(cfg, conn, profile, rows[0])
+        materials.save_version(cfg, conn, profile, rows[0], "letter", "Text")
     profile.reviewed = True
     cfg.resume_path.write_text("changed")
     with pytest.raises(ValueError, match="Resume changed"):
@@ -182,30 +192,6 @@ def test_fact_provenance_and_job_only_qualifications(preparation):
         "technology" in x
         for x in materials.unsupported("Python analysis", "Cell assays", "Python required")
     )
-
-
-def test_tailored_resume_preserves_source_structure(preparation, conn):
-    cfg, profile, rows = preparation
-    source = """# Real Name
-real@example.org
-
-## Experience
-### Scientist — Bio Labs | 2020–2024
-- Assays
-- Python analysis
-### Associate — Cell Labs | 2018–2020
-- Research
-
-## Education
-MSc, Example University, 2018
-"""
-    cfg.resume_path.write_text(source)
-    profile.resume_hash = resume.digest(resume.resume_text(cfg))
-    item = materials.tailored_resume(cfg, conn, profile, rows[0])
-    assert item["content"] == source.strip()
-    assert materials.resume_source_diff(cfg, item["content"]) == "No differences from resume.md."
-    assert "+Extra" in materials.resume_source_diff(cfg, item["content"] + "\nExtra\n")
-    assert item["profile_version"] == import_profile(conn, profile)
 
 
 def test_editor_flags_and_new_version(preparation, conn, monkeypatch):
@@ -276,12 +262,7 @@ def test_answers_reuse_across_employers(preparation, conn, monkeypatch):
 
 def ready(cfg, conn, profile, row, monkeypatch):
     materials.save_version(cfg, conn, profile, row, "letter", "I developed cell assays.")
-    materials.tailored_resume(cfg, conn, profile, row)
     answers.snapshot(cfg, conn, profile, row)
-    monkeypatch.setattr(materials, "browser_available", lambda: True)
-    monkeypatch.setattr(materials, "render_pdf", lambda text, out: out.write_bytes(b"fake-pdf"))
-    monkeypatch.setattr(materials, "ats_check", lambda *a: [])
-    materials.build_resume_pdf(cfg, conn, profile, row)
 
 
 def test_manual_approval_only_and_confirmed_submission(preparation, conn, monkeypatch):
@@ -294,7 +275,8 @@ def test_manual_approval_only_and_confirmed_submission(preparation, conn, monkey
     )
     ready(cfg, conn, profile, row, monkeypatch)
     paths = applications.approve(cfg, conn, profile, row)
-    assert len(paths) == 4 and all(Path(p).exists() for p in paths)
+    assert len(paths) == 3 and all(Path(p).exists() for p in paths)
+    assert str(cfg.resume_pdf_path) in paths
     assert row["application_state"] == "approved"
     assert (
         conn.execute(
@@ -355,36 +337,19 @@ def test_approval_rejects_stale_changed_missing_and_warned_materials(
 
 def test_pdf_missing_browser_is_actionable(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
+    materials.save_version(cfg, conn, profile, rows[0], "letter", "Dear team.")
     monkeypatch.setattr(materials, "browser_available", lambda: False)
     with pytest.raises(ValueError, match="playwright install chromium"):
-        materials.build_resume_pdf(cfg, conn, profile, rows[0])
-    assert materials.latest(conn, rows[0]["id"], "resume")
+        materials.build_letter_pdf(cfg, conn, profile, rows[0])
 
 
-def test_real_pdf_and_edit_version(preparation, conn):
+def test_real_letter_pdf(preparation, conn):
     if not materials.browser_available():
         pytest.skip("Chromium unavailable: uv run playwright install chromium")
     cfg, profile, rows = preparation
-    item = materials.tailored_resume(cfg, conn, profile, rows[0])
-    Path(item["path"]).write_text(item["content"] + "\n<!-- local note -->\n")
-    out, issues = materials.build_resume_pdf(cfg, conn, profile, rows[0])
-    assert not issues
+    materials.save_version(cfg, conn, profile, rows[0], "letter", "Dear team,\n\nAlex Example")
+    out = materials.build_letter_pdf(cfg, conn, profile, rows[0])
     assert out.read_bytes().startswith(b"%PDF")
-    assert materials.latest(conn, rows[0]["id"], "resume")["id"] != item["id"]
-
-
-def test_ats_detects_missing_contact_and_section_order(tmp_path, monkeypatch):
-    import pdfminer.high_level
-
-    monkeypatch.setattr(
-        pdfminer.high_level, "extract_text", lambda _: "Wrong Name Skills Experience"
-    )
-    issues = materials.ats_check(
-        tmp_path / "fake.pdf",
-        "# Alex Example\nalex@example.org\n## Experience\nAssays\n## Skills\nPython",
-        "Alex Example",
-    )
-    assert len(issues) == 3
 
 
 def test_preparation_commands_and_state_visibility(preparation, conn, sources, monkeypatch):
@@ -396,7 +361,8 @@ def test_preparation_commands_and_state_visibility(preparation, conn, sources, m
     from app.store import override_score
 
     override_score(conn, row["id"], 90, "apply", "Synthetic review")
-    assert cli.main(["resume", str(row["id"])]) == 0
+    assert cli.main(["resume"]) == 0
+    assert "attach this file as it is" in output.getvalue()
     assert cli.main(["diff", str(row["id"])]) == 0
     assert cli.main(["answers", "--job", str(row["id"]), "--add", "Visa status?", "--show"]) == 0
     assert cli.main(["state", str(row["id"]), "manual_required"]) == 0
@@ -492,9 +458,8 @@ def test_daily_limit_and_pdf_integrity(preparation, conn, monkeypatch):
     with pytest.raises(ValueError, match="daily_limit"):
         applications.approve(cfg, conn, profile, rows[1])
     cfg.apply.daily_limit = 5
-    item = materials.latest(conn, rows[1]["id"], "resume")
-    Path(item["pdf_path"]).write_bytes(b"tampered")
-    with pytest.raises(ValueError, match="PDF changed"):
+    cfg.resume_pdf_path.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="Resume PDF: .* is not a PDF"):
         applications.approve(cfg, conn, profile, rows[1])
 
 
@@ -520,14 +485,10 @@ def test_warning_acknowledgement_is_audited_and_hard_checks_remain(preparation, 
     row = rows[0]
     ready(cfg, conn, profile, row, monkeypatch)
     materials.save_version(cfg, conn, profile, row, "letter", "I achieved 999 results.", ["number"])
-    resume = materials.latest(conn, row["id"], "resume")
-    conn.execute(
-        "UPDATE material_versions SET ats_warnings=? WHERE id=?", ('["ATS issue"]', resume["id"])
-    )
     with pytest.raises(applications.UnresolvedWarnings) as caught:
         applications.approve(cfg, conn, profile, row)
     warnings = caught.value.warnings
-    assert warnings == {"letter": ["number"], "ATS": ["ATS issue"]}
+    assert warnings == {"letter": ["number"]}
     assert not conn.execute("SELECT 1 FROM application_approvals").fetchone()
     applications.approve(
         cfg, conn, profile, row, acknowledged_warnings=warnings, expected_ids=caught.value.ids
@@ -539,9 +500,13 @@ def test_warning_acknowledgement_is_audited_and_hard_checks_remain(preparation, 
     event = conn.execute("SELECT detail FROM application_events WHERE action='approval'").fetchone()
     assert json.loads(event[0])["acknowledged_warnings"] == warnings
     applications.validate_materials(cfg, conn, profile, row, acknowledged_warnings=warnings)
-    Path(resume["pdf_path"]).write_bytes(b"changed")
-    with pytest.raises(ValueError, match="PDF changed"):
-        applications.approve(cfg, conn, profile, row, acknowledged_warnings=warnings)
+    # The resume PDF is not pinned: a revised PDF keeps the approval valid.
+    with cfg.resume_pdf_path.open("ab") as pdf:
+        pdf.write(b"\n% revised\n")
+    assert applications.validate_materials(cfg, conn, profile, row, acknowledged_warnings=warnings)[
+        1
+    ] == {k: v for k, v in caught.value.ids.items()}
+    assert set(caught.value.ids) == {"letter", "answers"}
 
 
 def test_lexical_check_prose_and_fabrications():
@@ -606,19 +571,18 @@ def test_score_gate_and_external_import(preparation, conn, monkeypatch):
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     output = io.StringIO()
     monkeypatch.setattr(cli, "console", Console(file=output, width=200))
-    assert cli.main(["resume", str(row["id"])]) == 1
+    assert cli.main(["letter-pdf", str(row["id"])]) == 1
     assert "unscored" in output.getvalue() and "bio-jobs analyze" in output.getvalue()
     from app.store import override_score
 
     override_score(conn, row["id"], 90, "apply", "Reviewed")
-    old = materials.tailored_resume(cfg, conn, profile, row)
+    old = materials.save_version(cfg, conn, profile, row, "letter", "I developed cell assays.")
     Path(old["path"]).write_text(old["content"] + "\nEdited by candidate.\n")
     monkeypatch.setattr("builtins.input", lambda _: "import")
-    assert cli.main(["import", str(row["id"]), "--kind", "resume"]) == 0
-    new = materials.latest(conn, row["id"], "resume")
+    assert cli.main(["import", str(row["id"]), "--kind", "letter"]) == 0
+    new = materials.latest(conn, row["id"], "letter")
     assert new["id"] != old["id"] and "Edited by candidate" in new["content"]
     assert "Edited by candidate" in output.getvalue()
-    assert new["pdf_path"] is None
 
 
 def test_hours_only_unattended(preparation, conn):
@@ -656,7 +620,7 @@ def test_terminal_states_survive_preparation_and_reject_state_changes(preparatio
     materials.state(conn, row["id"], terminal)
     with pytest.raises(ValueError, match="reconciliation"):
         materials.state(conn, row["id"], "saved")
-    materials.tailored_resume(cfg, conn, profile, row)
+    materials.save_version(cfg, conn, profile, row, "letter", "Dear team.")
     answers.collect(cfg, conn, profile, [row], interactive=False, output=lambda _: None)
     assert (
         conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()[0]
@@ -700,7 +664,7 @@ def test_private_artifacts_under_umask(preparation, conn, tmp_path):
     cfg, profile, rows = preparation
     old = os.umask(0o022)
     try:
-        result = materials.tailored_resume(cfg, conn, profile, rows[0])
+        result = materials.save_version(cfg, conn, profile, rows[0], "letter", "Dear team.")
         answers.save_answer(cfg, "Question", "Synthetic answer")
         answers.snapshot(cfg, conn, profile, rows[0])
         llm._event(cfg, "test")
@@ -743,11 +707,11 @@ def test_placeholder_name_blocks_materials_and_forms(preparation, conn):
     cfg, profile, _ = preparation
     profile.name = "Example candidate"
     with pytest.raises(ValueError, match="Set your name"):
-        materials.tailored_resume(cfg, conn, profile, {})
+        materials.save_version(cfg, conn, profile, {}, "letter", "Text")
     with pytest.raises(ValueError, match="Set your name"):
         materials.write_batch(cfg, profile, [])
     with pytest.raises(ValueError, match="Set your name"):
-        values_for(conn, profile, {})
+        values_for(cfg, conn, profile, {})
 
 
 def test_signed_profile_name_is_traced_in_letter(preparation):
@@ -777,34 +741,6 @@ def test_letter_preferences_and_pdf(preparation, conn, monkeypatch):
         materials.build_letter_pdf(cfg, conn, profile, rows[0])
 
 
-def test_realistic_two_page_resume_pdf(preparation, conn):
-    if not materials.browser_available():
-        pytest.skip("Chromium unavailable")
-    from pdfminer.high_level import extract_text
-    from pdfminer.pdfpage import PDFPage
-
-    cfg, profile, rows = preparation
-    source = "# Synthetic Scientist\nscientist@example.org\n\n## Experience\n"
-    for year in range(2024, 2014, -1):
-        source += f"\n### Scientist, Synthetic Labs — {year - 1}–{year}\n"
-        source += "".join(f"- Developed assay workflow {i} for research teams.\n" for i in range(6))
-    source += "\n## Education\nMSc Biology, Synthetic University, 2014\n"
-    cfg.resume_path.write_text(source)
-    profile.resume_hash = resume.digest(resume.resume_text(cfg))
-    out, issues = materials.build_resume_pdf(cfg, conn, profile, rows[0])
-    assert not issues
-    with out.open("rb") as pdf:
-        assert len(list(PDFPage.get_pages(pdf))) == 2
-    text = extract_text(str(out))
-    assert "Synthetic Scientist" in text and "MSc Biology" in text
-
-
-def fake_pdf(monkeypatch):
-    monkeypatch.setattr(materials, "browser_available", lambda: True)
-    monkeypatch.setattr(materials, "render_pdf", lambda text, out: out.write_bytes(b"fake-pdf"))
-    monkeypatch.setattr(materials, "ats_check", lambda *a: [])
-
-
 def versions(conn, row):
     return conn.execute(
         "SELECT kind,id FROM material_versions WHERE job_id=? ORDER BY id", (row["id"],)
@@ -825,41 +761,37 @@ def test_prepare_creates_only_missing_and_keeps_current(preparation, conn, monke
     row = rows[0]
     calls = []
     mock_letters(monkeypatch, calls)
-    fake_pdf(monkeypatch)
-    resume_item = materials.tailored_resume(cfg, conn, profile, row)
     result = run_prepare(cfg, conn, profile, row)
-    assert result.created == ["letter", "resume PDF", "answers"]
-    assert result.current == ["resume"] and not result.problems
+    assert result.created == ["letter", "answers"]
+    assert result.current == ["resume PDF"] and not result.problems
     assert len(calls) == 1
-    assert materials.latest(conn, row["id"], "resume")["id"] == resume_item["id"]
+    assert not materials.latest(conn, row["id"], "resume")
     assert applications.approve(cfg, conn, profile, row)
     before = versions(conn, row)
     again = run_prepare(cfg, conn, profile, row)
     assert not again.created and not again.problems
-    assert again.current == ["letter", "resume", "resume PDF", "answers"]
+    assert again.current == ["letter", "resume PDF", "answers"]
     assert versions(conn, row) == before and len(calls) == 1
     assert row["application_state"] == "approved"
 
 
-def test_prepare_regenerates_stale_and_rebuilds_pdf(preparation, conn, monkeypatch):
+def test_prepare_regenerates_stale_and_reports_unreadable_pdf(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     row = rows[0]
     calls = []
     mock_letters(monkeypatch, calls)
-    fake_pdf(monkeypatch)
     run_prepare(cfg, conn, profile, row)
-    old = {kind: materials.latest(conn, row["id"], kind)["id"] for kind in ("letter", "resume")}
+    old = materials.latest(conn, row["id"], "letter")["id"]
     profile.specialties.append("changed preference")
     result = run_prepare(cfg, conn, profile, row)
-    assert result.created == ["letter", "resume", "resume PDF", "answers"]
+    assert result.created == ["letter", "answers"]
     assert len(calls) == 2
-    for kind, previous in old.items():
-        assert materials.latest(conn, row["id"], kind)["id"] != previous
+    assert materials.latest(conn, row["id"], "letter")["id"] != old
     assert applications.approve(cfg, conn, profile, row)
-    item = materials.latest(conn, row["id"], "resume")
-    Path(item["pdf_path"]).write_bytes(b"tampered")
+    cfg.resume_pdf_path.write_bytes(b"tampered")
     result = run_prepare(cfg, conn, profile, row)
-    assert result.created == ["resume PDF"] and len(calls) == 2
+    assert not result.created and len(calls) == 2
+    assert any("Resume PDF:" in p and "is not a PDF" in p for p in result.problems)
 
 
 def test_prepare_never_replaces_edited_files(preparation, conn, monkeypatch):
@@ -867,20 +799,16 @@ def test_prepare_never_replaces_edited_files(preparation, conn, monkeypatch):
     row = rows[0]
     calls = []
     mock_letters(monkeypatch, calls)
-    fake_pdf(monkeypatch)
     run_prepare(cfg, conn, profile, row)
     before = versions(conn, row)
     letter = materials.latest(conn, row["id"], "letter")
-    resume_item = materials.latest(conn, row["id"], "resume")
     Path(letter["path"]).write_text("My own letter.")
-    Path(resume_item["path"]).write_text(resume_item["content"] + "\nEdited.\n")
     profile.specialties.append("stale too")
     result = run_prepare(cfg, conn, profile, row)
     assert f"letter file changed; run bio-jobs import {row['id']} --kind letter" in "".join(
         result.problems
     )
-    assert any("--kind resume" in problem for problem in result.problems)
-    assert "resume" not in result.created and "resume PDF" not in result.created
+    assert "letter" not in result.created
     assert len(calls) == 1
     assert [v for v in versions(conn, row) if v["kind"] != "answers"] == [
         v for v in before if v["kind"] != "answers"
@@ -896,7 +824,6 @@ def test_prepare_command_non_interactive_lists_questions(preparation, conn, monk
     override_score(conn, row["id"], 90, "apply", "Synthetic review")
     answers.add_question(conn, row["id"], "Notice period?")
     mock_letters(monkeypatch, [])
-    fake_pdf(monkeypatch)
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("Unexpected prompt"))
@@ -904,10 +831,12 @@ def test_prepare_command_non_interactive_lists_questions(preparation, conn, monk
     monkeypatch.setattr(cli, "console", Console(file=output, width=200))
     assert cli.main(["prepare", str(row["id"])]) == 0
     text = output.getvalue()
-    assert "Prepared: letter, resume, resume PDF, answers" in text
+    assert "Prepared: letter, answers" in text
+    assert "Already current, left unchanged: resume PDF" in text
+    assert "resume PDF (attached unchanged)" in text
     assert "Claim: I developed cell assays." in text
     assert "Notice period?" in text and f"bio-jobs prepare {row['id']}" in text
-    for kind in ("letter", "resume", "answers"):
+    for kind in ("letter", "answers"):
         assert materials.latest(conn, row["id"], kind)
 
 
@@ -921,7 +850,6 @@ def test_prepare_command_asks_only_unanswered(preparation, conn, monkeypatch):
     answers.add_question(conn, row["id"], "Right to work in the UK?")
     answers.add_question(conn, row["id"], "Notice period?")
     mock_letters(monkeypatch, [])
-    fake_pdf(monkeypatch)
     monkeypatch.setattr(cli, "Settings", lambda: cfg)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     asked = []
@@ -941,7 +869,6 @@ def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, r
     cfg.apply.mode = "auto"
     calls = []
     mock_letters(monkeypatch, calls)
-    fake_pdf(monkeypatch)
     keys = iter("aq")
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(cli, "read_key", lambda: next(keys))
@@ -957,7 +884,7 @@ def test_review_approve_prepares_then_confirms(preparation, conn, monkeypatch, r
     assert len(calls) == 1
     assert bool(conn.execute("SELECT 1 FROM application_approvals").fetchone()) is approved
     assert ("Approval cancelled; materials kept." in text) is not approved
-    for kind in ("letter", "resume", "answers"):
+    for kind in ("letter", "answers"):
         assert materials.latest(conn, row["id"], kind)
 
 

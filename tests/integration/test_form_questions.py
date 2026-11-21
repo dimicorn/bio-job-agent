@@ -7,7 +7,7 @@ import httpx
 import pytest
 import test_materials
 import yaml
-from test_materials import fake_pdf, mock_letters
+from test_materials import mock_letters
 
 from app import answers, applications, forms, materials
 from app.applier import FormApplier, FormStop
@@ -233,7 +233,6 @@ def prepare(cfg, conn, profile, row, read, *, interactive, replies=(), said=None
 def test_prepare_asks_form_questions_up_front_and_reuses_answers(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     mock_letters(monkeypatch, [])
-    fake_pdf(monkeypatch)
     profile.phone = "+44 20 7946 0000"
     profile.linkedin = "https://www.linkedin.com/in/alex-example"
     profile.city = "Example City, United Kingdom"
@@ -298,7 +297,6 @@ def test_prepare_asks_form_questions_up_front_and_reuses_answers(preparation, co
 def test_unanswered_required_form_questions_block_silent_approval(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     mock_letters(monkeypatch, [])
-    fake_pdf(monkeypatch)
     row = rows[0]
     row["apply_url"] = GREENHOUSE
     result, prompts, _ = prepare(cfg, conn, profile, row, recorded([]), interactive=False)
@@ -316,7 +314,6 @@ def test_unanswered_required_form_questions_block_silent_approval(preparation, c
 def test_prepare_continues_when_the_form_cannot_be_read(preparation, conn, monkeypatch):
     cfg, profile, rows = preparation
     mock_letters(monkeypatch, [])
-    fake_pdf(monkeypatch)
     row = rows[0]
     row["apply_url"] = ASHBY
     result, prompts, said = prepare(cfg, conn, profile, row, recorded([]), interactive=True)
