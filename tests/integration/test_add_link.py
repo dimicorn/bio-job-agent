@@ -372,8 +372,12 @@ def test_cli_add_prints_id_score_and_review_command(cli_env):
     output.truncate(0)
     output.seek(0)
     assert cli.main(["list", "--job", "1"]) == 0
-    assert "1 Added by link; normally excluded by" in output.getvalue()
     assert "1 matching roles" in output.getvalue()
+    assert "Added by link" not in output.getvalue()
+    output.truncate(0)
+    output.seek(0)
+    assert cli.main(["show", "1"]) == 0
+    assert "Added by link; normally excluded by" in output.getvalue()
 
 
 def test_cli_add_failure_is_plain(cli_env):

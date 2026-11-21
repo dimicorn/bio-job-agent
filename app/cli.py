@@ -13,9 +13,8 @@ from pathlib import Path
 import httpx
 import yaml
 from rich.table import Table
-from rich.text import Text
 
-from app import answers, applications, keywords, materials, stop
+from app import answers, applications, jobview, keywords, materials, stop
 from app.candidate.profile import import_profile, load_profile
 from app.console import Handler, console, fail, header, log, ok, run_summary, summary, warn
 from app.console import text as _text
@@ -114,113 +113,35 @@ def _select(rows, args, *, review=False, min_score=0):
     return result[: args.limit]
 
 
-def _list(rows):
-    table = Table(
-        "#",
-        "ID",
-        "Title",
-        "Employer",
-        "Location",
-        "Posted / discovered",
-        "Review / application",
-        "Score / evidence / gaps",
-        "Resume keywords",
-        "Apply link",
-        title="Jobs — highest fit score first",
-        show_lines=True,
+def _list(rows, *, details=False):
+    if rows:
+        console.print(jobview.table(rows, console.width))
+    if jobview.legend(rows):
+        console.print(_text(jobview.legend(rows), "dim"))
+    if details:
+        for row in rows:
+            console.rule()
+            jobview.detail(row, target=console)
+    console.print(
+        f"{len(rows)} matching roles. Unscored jobs have no verified matching result. "
+        "Details: bio-jobs show <ID>."
     )
-    for column in table.columns:
-        column.overflow = "fold"
-    for rank, row in enumerate(rows, 1):
-        table.add_row(
-            str(rank),
-            str(row["id"]),
-            _text(row["title"]),
-            _text(row["employer"]),
-            _text("; ".join(row.get("locations") or []) or row["location"] or "unknown"),
-            _text(row.get("date_label", "posting date unknown")),
-            row["review"]
-            + " / "
-            + (row.get("application_state") or "unprepared")
-            + (
-                f"\ncompany cooldown until {row['company_cooldown_until'][:10]}"
-                if row.get("company_cooldown_until")
-                else ""
-            ),
-            _text(_score_summary(row)),
-            _text(_keyword_cell(row)),
-            Text("Open", style=f"link {row['apply_url']}"),
-        )
-    console.print(table)
-    # Keep full copyable links in redirected output and narrow terminals too.
-    for row in rows:
-        if len(row.get("grouped_job_ids", [])) > 1:
-            console.print(_text(f"{row['id']} grouped stored job IDs: {row['grouped_job_ids']}"))
-        for line in _link_lines(row)[:1]:
-            console.print(_text(f"{row['id']} {line}"))
-        for origin in row["origins"]:
-            console.print(
-                _text(
-                    f"{row['id']} origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}"
-                ),
-                soft_wrap=True,
-            )
-    console.print(f"{len(rows)} matching roles. Unscored jobs have no verified matching result.")
 
 
-def _keyword_cell(row):
-    if "keywords" not in row:
-        return ""
-    if row["keywords"] is None and not row.get("keywords_resume"):
-        return "no resume.md"
-    return keywords.summary(row["keywords"])
-
-
-def _keyword_lines(row, limit=8):
-    """Informational: the LLM score, score gate and filters never use this."""
-    match = row.get("keywords")
-    if not row.get("keywords_resume"):
-        return ["Resume keywords: no resume.md to compare"]
-    if not match:
-        return ["Resume keywords: no recognised job keywords (informational)"]
-    lines = [
-        f"Resume keywords: {match['score']}% — {len(match['present'])} of {match['total']} "
-        + "job keywords are in resume.md (informational; not part of the score)"
-    ]
-    for label, key in (("In resume", "present"), ("Missing", "missing")):
-        items = match[key]
-        if items:
-            more = f" (+{len(items) - limit} more)" if len(items) > limit else ""
-            lines.append(f"  {label}: " + ", ".join(items[:limit]) + more)
-    return lines
-
-
-def _score_summary(row):
-    evaluation = row.get("evaluation")
-    override = row.get("override")
-    parts = ["unscored" if row.get("score") is None else f"{row['score']}/100"]
-    if evaluation:
-        parts += [evaluation["recommendation"], f"confidence: {evaluation['confidence']}"]
-        parts += [
-            "Evidence: " + "; ".join(evaluation["strengths"][:2]),
-            "Gaps: " + ("; ".join(evaluation["gaps"][:2]) or "none stated"),
-        ]
-        parts += ["Uncertainty: " + x for x in evaluation["uncertainty_flags"]]
-    if override:
-        parts.append(f"User override: {override['recommendation']} — {override['reason']}")
-    return "\n".join(parts)
-
-
-def _link_lines(row):
-    if not row.get("added_by_link"):
-        return []
-    notes = row.get("filter_notes") or []
-    if not notes:
-        return ["Added by link."]
-    return [
-        "Added by link; normally excluded by: " + "; ".join(notes),
-        "Kept for you to decide: save (s) or reject (r).",
-    ]
+def _materials_summary(conn, row):
+    """One line per material on the card; warnings stay visible, content is behind c."""
+    current = conn.execute("SELECT state FROM applications WHERE job_id=?", (row["id"],)).fetchone()
+    parts = [f"Application: {current[0] if current else 'unprepared'}"]
+    found = []
+    for kind in ("letter", "answers"):
+        item = materials.latest(conn, row["id"], kind)
+        if item:
+            found.append(item)
+            parts.append(f"{kind} v{item['id']}")
+    console.print(_text(" · ".join(parts) + (" (c: show)" if found else "")))
+    for item in found:
+        for warning in json.loads(item["warnings"]) + json.loads(item["ats_warnings"] or "[]"):
+            console.print(_text("WARNING: " + warning, "yellow"))
 
 
 def read_key() -> str:
@@ -247,67 +168,11 @@ def _review(conn, rows, cfg=None, profile=None):
     approved_this_run = 0
     for index, row in enumerate(rows, 1):
         console.rule(f"{index}/{len(rows)}")
-        console.print(_text(f"{row['title']} — {row['employer']}"))
-        if len(row.get("grouped_job_ids", [])) > 1:
-            console.print(_text(f"Grouped stored job IDs: {row['grouped_job_ids']}"))
-        console.print(_text(f"{row['location'] or 'unknown'}; discovered {row['discovered_at']}"))
-        console.print(_text(row.get("date_label", "posting date unknown")))
-        if row.get("company_cooldown_until"):
-            console.print(_text(f"company cooldown until {row['company_cooldown_until'][:10]}"))
-        for line in _link_lines(row):
-            console.print(_text(line))
-        console.print(_text(row["description"]))
-        console.print(_text(_score_summary(row)))
-        for line in _keyword_lines(row):
-            console.print(_text(line))
-        if row.get("evaluation"):
-            console.print(
-                _text(
-                    f"Scoring version: {row['scoring_version']}; "
-                    f"reviewed profile version: {row['profile_version']}"
-                )
-            )
-            for name, dimension in row["evaluation"]["dimensions"].items():
-                console.print(
-                    _text(
-                        f"{name} (weight {row['scoring_weights'][name]}): "
-                        f"{dimension['score']} ({dimension['confidence']}); "
-                        f"{dimension['explanation']}; "
-                        f"candidate: {dimension['candidate_evidence'] or 'unknown'}; "
-                        f"job: {dimension['job_evidence'] or 'unknown'}"
-                    )
-                )
-            checks = [r for r in row["evaluation"]["must_haves"] if r["status"] != "met"]
-            console.print("Check before applying:")
-            if not checks:
-                console.print(
-                    "  Confirm eligibility and conditions with the employer; absence of a listed requirement is not confirmation."
-                )
-            for requirement in checks[:5]:
-                console.print(
-                    _text(
-                        f"  {requirement['requirement']} ({requirement['status']}); "
-                        f"candidate: {requirement['candidate_evidence'] or 'unknown'}; "
-                        f"job: {requirement['job_evidence']}"
-                    )
-                )
-            for requirement in row["evaluation"]["must_haves"]:
-                console.print(
-                    _text(
-                        f"Must-have {requirement['status']}: {requirement['requirement']}; "
-                        f"candidate: {requirement['candidate_evidence'] or 'unknown'}; "
-                        f"job: {requirement['job_evidence']}"
-                    )
-                )
-        for origin in row["origins"]:
-            console.print(
-                _text(f"Origin {origin['id']} ({origin['source_id']}): {origin['apply_url']}")
-            )
-        console.print(_text("Locations: " + ("; ".join(row.get("locations") or []) or "unknown")))
-        _show_materials(conn, row, profile, cfg)
+        jobview.card(row, target=console)
+        _materials_summary(conn, row)
         console.print(
-            "o open | s save | r reject | l later | v override | e edit letter | "
-            "w rewrite | d diff | "
+            "o open | s save | r reject | l later | i description | x scoring | "
+            "c letter/claims | v override | e edit letter | w rewrite | d diff | "
             + (
                 "a approve/fill"
                 if cfg and cfg.apply.mode == "assisted"
@@ -341,7 +206,10 @@ def _review(conn, rows, cfg=None, profile=None):
                         # Gates first, so ineligible jobs never spend LLM calls on materials.
                         applications.check_gates(cfg, conn, row, used=approved_this_run)
                         applications.check_company(cfg, conn, row)
-                        prepared = _prepare(conn, row, cfg, profile, interactive=True)
+                        # The letter and its cited facts are shown before anything is approved.
+                        prepared = _prepare(
+                            conn, row, cfg, profile, interactive=True, show="always"
+                        )
                         if prepared.problems:
                             console.print(_text("Approval not recorded.", "yellow"))
                             continue
@@ -453,6 +321,14 @@ def _review(conn, rows, cfg=None, profile=None):
                         console.print(f"State: {value}")
                 except (ValueError, RuntimeError, OSError) as exc:
                     console.print(_text(str(exc), "red"))
+                continue
+            if action in ("i", "x", "c"):
+                if action == "i":
+                    jobview.description(row, target=console)
+                elif action == "x":
+                    jobview.explanation(row, target=console)
+                else:
+                    _show_materials(conn, row, profile, cfg)
                 continue
             if action == "o":
                 if not webbrowser.open(row["apply_url"]):
@@ -679,10 +555,10 @@ def _add(conn, cfg, profile, sources, args):
         console.print(_text(f"Job {job_id} is stored but not open for review."))
         return 0
     console.print(_text(f"{row['title']} — {row['employer']} ({row['location'] or 'unknown'})"))
-    for line in _link_lines(row)[:1]:
+    for line in jobview.link_lines(row)[:1]:
         console.print(_text(line))
     if row.get("score") is not None:
-        console.print(_text("Score: " + _score_summary(row).split("\n", 2)[0]))
+        console.print(_text("Score: " + f"{row['score']}/100"))
         if row.get("evaluation"):
             console.print(_text(f"Recommendation: {row['evaluation']['recommendation']}"))
     else:
@@ -1018,12 +894,26 @@ def _run(args, cfg):
                 row = selected[0]
                 console.print(_text(str(materials.build_letter_pdf(cfg, conn, profile, row))))
             return 0
+        if args.command == "show":
+            row = next(
+                (r for r in ranked if args.job_id in r.get("grouped_job_ids", [r["id"]])), None
+            )
+            if row is None:
+                raise ValueError(
+                    f"Job {args.job_id} is not open for review; "
+                    "bio-jobs export keeps every stored field"
+                )
+            keywords.attach_keyword_matches(conn, cfg, [row])
+            jobview.detail(row, full=args.full, target=console)
+            if args.full:
+                _show_materials(conn, row, profile, cfg)
+            return 0
         rows = _select(
             ranked, args, review=args.command == "review", min_score=cfg.analyst.min_score
         )
         keywords.attach_keyword_matches(conn, cfg, rows)
         if args.command == "list":
-            _list(rows)
+            _list(rows, details=args.details)
         elif args.command == "review":
             _review(conn, rows, cfg, profile)
         elif args.command == "export":
@@ -1134,7 +1024,18 @@ def main(argv=None) -> int:
             if s not in ("approved", "submitted", "submitting", "unknown_result")
         ],
     )
-    _filters(sub.add_parser("list", help="List matching jobs, highest score first"))
+    listing = sub.add_parser("list", help="Compact list of matching jobs, highest score first")
+    _filters(listing)
+    listing.add_argument(
+        "--details", action="store_true", help="Also print each job's scoring explanation"
+    )
+    show = sub.add_parser("show", help="Print one job's scoring explanation (no prompts)")
+    show.add_argument("job_id", type=_positive)
+    show.add_argument(
+        "--full",
+        action="store_true",
+        help="Also print dimension scores, the job description and the letter with its claims",
+    )
     _filters(sub.add_parser("review", help="Review jobs with single-key decisions"), review=True)
     exp = sub.add_parser("export", help="Export matching jobs to CSV")
     exp.add_argument("path", type=Path)

@@ -293,7 +293,7 @@ def test_scoring_cli_and_stale_results(
     fake_answers(monkeypatch, [])
     assert cli.main(["analyze"]) == 0
     assert cli.main(["list"]) == 0
-    assert "80/100" in output.getvalue()
+    assert "80 apply" in output.getvalue()
     assert cli.main(["analyze"]) == 0
     assert "Scored 0 jobs" in output.getvalue()
     monkeypatch.setattr(cli, "discover", lambda *a, **kw: [])
