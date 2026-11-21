@@ -22,7 +22,7 @@ uv run bio-jobs doctor
 uv run bio-jobs scan
 ```
 
-Until `reviewed: true` is set, `scan` stops with "Scoring requires factual review". Listing and review show jobs scoring at least `analyst.min_score` (default 50); preparing or submitting an application also requires `apply.min_score` (default 80), so lower-scoring jobs are not applied to unless you override them in `review --all-scores`.
+Until `reviewed: true` is set, `scan` stops with "Scoring requires factual review". Listing and review show jobs scoring at least `analyst.min_score` (default 50); in `manual`, `assisted` and `dry_run` modes you can approve and fill any of them, because your approval is the check. `apply.min_score` (default 80) applies only to unattended automatic submission (`auto` mode, autopilot and scheduled runs), which skips jobs below it. Use `review --all-scores` and `v` to override a score.
 
 `bio-jobs` or `bio-jobs help` shows commands without network access. On the first operational run without `config.yaml`, the wizard opens automatically in a terminal; noninteractive runs print a setup instruction. Discovery does not call an LLM. Profile extraction and scoring send candidate facts and job text to the configured LLM; setup, `llm-check`, and `doctor --online` send small connection checks. Install and authenticate the CLI you select (OpenCode, Pi, Codex or Claude Code); the script does not install those applications.
 

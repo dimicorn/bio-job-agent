@@ -267,6 +267,40 @@ def test_gate_rechecked_at_execution_and_run_limit(prepared, conn, page):
     assert not conn.execute("SELECT * FROM application_attempts").fetchall()
 
 
+def test_attended_approval_below_apply_min_score_never_auto_submitted(prepared, conn):
+    cfg, profile, rows = prepared
+    rows[0]["score"] = 60
+    cfg.apply.mode = "assisted"
+    approve(prepared, conn)  # The person's approval is the check in attended modes.
+    opened = []
+
+    def browser(*args, **kwargs):
+        opened.append(1)
+        raise AssertionError("no browser for a job below apply.min_score")
+
+    output = []
+    for mode, unattended in (("auto", False), ("assisted", True)):
+        cfg.apply.mode = mode
+        assert (
+            autopilot.run(
+                cfg,
+                conn,
+                profile,
+                [rows[0]],
+                browser_factory=browser,
+                output=output.append,
+                unattended=unattended,
+            )
+            == []
+        )
+        with pytest.raises(ValueError, match="skipped.*automatic submission"):
+            autopilot.run(cfg, conn, profile, [rows[0]], job=rows[0]["id"], unattended=unattended)
+    skipped = [line for line in map(str, output) if "skipped" in line]
+    assert not opened and len(skipped) == 2
+    assert all("automatic submission" in line for line in skipped)
+    assert not conn.execute("SELECT * FROM application_attempts").fetchall()
+
+
 @pytest.mark.parametrize("change", ["bank", "new_letter", "unreadable_pdf"])
 def test_approved_versions_and_answers_are_pinned(prepared, conn, change):
     cfg, profile, row = approve(prepared, conn)

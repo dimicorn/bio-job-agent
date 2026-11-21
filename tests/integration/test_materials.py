@@ -303,6 +303,7 @@ def test_apply_gates(preparation, conn, monkeypatch, gate, value, error):
     cfg, profile, rows = preparation
     ready(cfg, conn, profile, rows[0], monkeypatch)
     setattr(cfg.apply, gate, value)
+    cfg.apply.mode = "auto"
     with pytest.raises(ValueError, match=error):
         applications.approve(
             cfg,
@@ -590,6 +591,33 @@ def test_score_gate_and_external_import(console_output, preparation, conn, monke
     new = materials.latest(conn, row["id"], "letter")
     assert new["id"] != old["id"] and "Edited by candidate" in new["content"]
     assert "Edited by candidate" in output.getvalue()
+
+
+@pytest.mark.parametrize("mode", ["manual", "assisted", "dry_run", "auto"])
+@pytest.mark.parametrize("score", [None, 40, 60, 90])
+@pytest.mark.parametrize("unattended", [False, True])
+def test_apply_min_score_bars_only_automatic_submission(preparation, conn, mode, score, unattended):
+    cfg, _, rows = preparation
+    row = dict(rows[0], score=score)
+    cfg.apply.mode = mode
+    cfg.analyst.min_score, cfg.apply.min_score = 50, 80
+    now = datetime(2026, 11, 15, 12, tzinfo=UTC)
+    automatic = unattended or mode == "auto"
+    threshold = 80 if automatic else 50
+    if score is not None and score >= threshold:
+        applications.check_gates(
+            cfg, conn, row, now=now, unattended=unattended, dry_run=mode == "dry_run"
+        )
+        return
+    with pytest.raises(ValueError) as exc:
+        applications.check_gates(
+            cfg, conn, row, now=now, unattended=unattended, dry_run=mode == "dry_run"
+        )
+    message = str(exc.value)
+    if score == 60:
+        assert "skipped" in message and "apply.min_score" in message and "automatic" in message
+    else:
+        assert ("unscored" if score is None else f"below {threshold}") in message
 
 
 def test_hours_only_unattended(preparation, conn):
