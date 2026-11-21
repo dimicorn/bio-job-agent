@@ -197,6 +197,8 @@ def apply_one(cfg, conn, profile, row, page, *, used=0, now=None, output=log, un
             values["letter_file"] = str(pdf)
 
         def queue(label, options, required):
+            if answers.identity_answered(label, values):
+                return  # the profile or resume fills it; it is never a question to ask
             answers.add_question(conn, row["id"], label, options, required)
             log("question_discovered", question=label, required=required, options=options)
 

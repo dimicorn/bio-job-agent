@@ -100,10 +100,10 @@ def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=log,
         )
         is not None
     )
-    if interactive and any(not i["answer"] for i in answers.plan(cfg, conn, row)):
+    if interactive and any(not i["answer"] for i in answers.plan(cfg, conn, row, profile)):
         output("Screening questions the answer bank cannot answer:")
-        answers.ask_missing(cfg, conn, row, interactive=True, output=output)
-    items = answers.plan(cfg, conn, row)
+        answers.ask_missing(cfg, conn, row, profile=profile, interactive=True, output=output)
+    items = answers.plan(cfg, conn, row, profile)
     if found == "current" and yaml.safe_load(item["content"]) == {"items": items}:
         result.current.append("answers")
     else:

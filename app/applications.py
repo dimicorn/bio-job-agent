@@ -178,7 +178,9 @@ def validate_materials(cfg, conn, profile, row, *, acknowledged_warnings=None):
         raise ValueError("Resume PDF: " + "; ".join(pdf.problems))
     paths.append(str(pdf.path))
     current_answers = materials.latest(conn, row["id"], "answers")
-    if yaml.safe_load(current_answers["content"]) != {"items": answers.plan(cfg, conn, row)}:
+    if yaml.safe_load(current_answers["content"]) != {
+        "items": answers.plan(cfg, conn, row, profile)
+    }:
         raise ValueError(
             f"Screening answers changed or differ from the answer bank; update the bank and run bio-jobs answers --job {row['id']}"
         )

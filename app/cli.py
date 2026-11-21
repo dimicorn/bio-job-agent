@@ -933,7 +933,7 @@ def _run(args, cfg):
                 raise ValueError("Material changed during confirmation; review again")
             warnings = ["Externally edited material: review all content and claims"]
             if args.kind == "answers" and yaml.safe_load(content) != {
-                "items": answers.plan(cfg, conn, row)
+                "items": answers.plan(cfg, conn, row, profile)
             }:
                 warnings.append(
                     "Answers differ from the answer bank; update the bank and regenerate before approval"

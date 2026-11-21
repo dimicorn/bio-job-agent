@@ -1095,3 +1095,29 @@ def test_workable_nested_radio_inputs_are_not_duplicate_fields(prepared, page):
     steps = applier.plan(fields, {}, {"right to work": "Yes"}, "Example", lambda *x: None)
     applier.fill_one(steps[0])
     assert page.locator("[role=radio]").first.get_attribute("aria-checked") == "true"
+
+
+def test_resume_phone_fills_the_form_and_is_never_queued(prepared, conn, page):
+    cfg, profile, _ = prepared
+    cfg.resume_path.write_text(
+        "# Alex Example\n+44 20 7946 0000 · alex@example.org\n## Experience\nCell assays.\n"
+    )
+    profile.resume_hash = resume.digest(resume.resume_text(cfg))
+    cfg, profile, row = approve(prepared, conn)
+    mock_form(page, "greenhouse", extra="<label>Phone number *<input type=tel required></label>")
+    assert autopilot.apply_one(cfg, conn, profile, row, page) == "submitted"
+    assert not conn.execute(
+        "SELECT 1 FROM screening_questions WHERE label='Phone number *'"
+    ).fetchone()
+    assert any(
+        e["action"] == "fill" and '"source": "phone"' in e["detail"] for e in events(conn, row)
+    )
+
+
+def test_identity_answered_maps_labels_to_known_values():
+    values = {"phone": "+44 20 7946 0000", "country": "", "linkedin": "x", "resume": "cv.pdf"}
+    assert answers.identity_answered("Phone*", values)
+    assert answers.identity_answered("LinkedIn Profile", values)
+    assert not answers.identity_answered("Country", values)  # nothing states it: ask
+    assert not answers.identity_answered("Resume/CV", values)
+    assert not answers.identity_answered("What is your notice period?", values)
