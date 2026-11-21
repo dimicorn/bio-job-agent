@@ -94,8 +94,28 @@ def group_stored_jobs(conn, rows):
                 if location
             )
         )
+        if any("board_sources" in item for item in group):
+            representative["board_sources"] = list(
+                dict.fromkeys(x for item in group for x in item.get("board_sources") or [])
+            )
+        origin = employer_origin(representative)
+        if origin:
+            representative["apply_url"] = origin["apply_url"]
+            representative["apply_source"] = origin["source_id"]
         result.append(representative)
     return result
+
+
+def employer_origin(row):
+    """The employer's own present posting; a job board page is used only when it is the sole origin."""
+    present = [
+        o
+        for o in row.get("origins") or []
+        if o.get("present", 1) and o.get("adapter") not in (None, "jsonfeed") and o.get("apply_url")
+    ]
+    own = [o for o in present if o["apply_url"] == row.get("apply_url")]
+    ats = [o for o in present if o.get("adapter") != "link"]
+    return next(iter(own or ats or present), None)
 
 
 def _update_canonical(conn, job_id, job, now):

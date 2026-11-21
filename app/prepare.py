@@ -46,6 +46,17 @@ def status(conn, row, kind, version):
     return "current", item
 
 
+def gate_problem(cfg, row):
+    """Why this job is not prepared, said before any progress line; None when it may be."""
+    from app.applications import below_score, override_hint, score_gate_message
+
+    if row.get("review") == "rejected":
+        return f"job {row['id']} is rejected. " + override_hint(row)
+    if below_score(cfg, row):
+        return score_gate_message(cfg, row)
+    return None
+
+
 def prepare_materials(cfg, conn, profile, row, *, output=log):
     """Create a missing or stale letter and check the supplied resume PDF."""
     require_reviewed(cfg, profile)
@@ -67,7 +78,8 @@ def prepare_materials(cfg, conn, profile, row, *, output=log):
                 result.created.append("letter")
             else:
                 result.problems.append(
-                    "Letter not written: the job is below analyst.min_score, rejected or closed"
+                    "Letter not written: "
+                    + (gate_problem(cfg, row) or "the job is closed or withdrawn")
                 )
         except (ValueError, RuntimeError) as exc:
             result.problems.append(f"Letter failed: {exc}")

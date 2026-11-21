@@ -289,6 +289,8 @@ def write_batch(cfg, profile, rows, instruction=""):
 
 
 def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
+    from app.applications import below_score
+
     require_name(profile)
     require_reviewed(cfg, profile)
     version = import_profile(conn, profile)
@@ -296,8 +298,7 @@ def write_letters(cfg, conn, profile, rows, force=False, instruction=""):
     for row in rows:
         old = latest(conn, row["id"], "letter")
         if (
-            row.get("score") is None
-            or row["score"] < cfg.analyst.min_score
+            below_score(cfg, row)
             or row.get("review") == "rejected"
             or row.get("application_state") in ("withdrawn", "submitted")
         ):

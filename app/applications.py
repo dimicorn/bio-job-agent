@@ -111,6 +111,27 @@ def score_threshold(cfg, *, unattended=False):
     return cfg.analyst.min_score
 
 
+def person_override(cfg, row, *, unattended=False):
+    """The person's "apply anyway" from review counts only in attended, non-auto modes."""
+    override = row.get("override") or {}
+    return bool(override.get("attended")) and not unattended and cfg.apply.mode != "auto"
+
+
+def below_score(cfg, row, *, apply=False, unattended=False):
+    """True when the score gate stops this job (unscored counts as below)."""
+    if person_override(cfg, row, unattended=unattended):
+        return False
+    threshold = score_threshold(cfg, unattended=unattended) if apply else cfg.analyst.min_score
+    return row.get("score") is None or row["score"] < threshold
+
+
+def override_hint(row):
+    return (
+        f"To apply anyway, run uv run bio-jobs review --status all --all-scores --job {row['id']} "
+        "and press a."
+    )
+
+
 def score_gate_message(cfg, row, *, apply=False, unattended=False):
     threshold = score_threshold(cfg, unattended=unattended) if apply else cfg.analyst.min_score
     score = row.get("score")
@@ -120,10 +141,28 @@ def score_gate_message(cfg, row, *, apply=False, unattended=False):
             f"Job {row['id']} skipped: {reason} (apply.min_score threshold for automatic submission). "
             "Apply in manual or assisted mode, or override the score with v in review."
         )
-    return (
-        f"Job {row['id']} is {reason} (threshold {threshold}). Run bio-jobs analyze; "
-        "or bio-jobs review --all-scores and use v to override with a reason."
-    )
+    if score is None:
+        return (
+            f"Job {row['id']} is {reason} (threshold {threshold}). Run bio-jobs analyze; "
+            "or bio-jobs review --all-scores and use v to override with a reason."
+        )
+    if unattended or cfg.apply.mode == "auto":
+        return (
+            f"Job {row['id']} scored {score}, below {threshold}; automatic submission never "
+            "applies below it. Use manual or assisted mode to apply anyway."
+        )
+    return f"Job {row['id']} scored {score}, below {threshold}. " + override_hint(row)
+
+
+def gate_reasons(cfg, row):
+    """Why review's a would stop: the person rejected the job, or it scores below the gate."""
+    reasons = []
+    if row.get("review") == "rejected":
+        reasons.append("rejected")
+    score = row.get("score")
+    if score is not None and below_score(cfg, row):
+        reasons.append(f"scored {score}, below {cfg.analyst.min_score}")
+    return reasons
 
 
 def check_gates(
@@ -131,7 +170,7 @@ def check_gates(
 ):
     now = now or datetime.now().astimezone()
     gate = cfg.apply
-    if row.get("score") is None or row["score"] < score_threshold(cfg, unattended=unattended):
+    if below_score(cfg, row, apply=True, unattended=unattended):
         raise ValueError(score_gate_message(cfg, row, apply=True, unattended=unattended))
     current = conn.execute(
         "SELECT state,submitted_at FROM applications WHERE job_id=?", (row["id"],)

@@ -170,17 +170,21 @@ def review_job(conn, job_id: int, decision: str) -> None:
     conn.commit()
 
 
-def override_score(conn, job_id: int, score: int, recommendation: str, reason: str) -> None:
+def override_score(
+    conn, job_id: int, score: int, recommendation: str, reason: str, *, attended: bool = False
+) -> None:
+    """Save the person's score; attended marks an "apply anyway" from review (never auto mode)."""
     if type(score) is not int or not 0 <= score <= 100:
         raise ValueError("Override score must be an integer from 0 to 100")
     if recommendation not in ("apply", "maybe", "skip") or not reason.strip():
         raise ValueError("Override needs apply/maybe/skip and a reason")
     conn.execute(
-        """INSERT INTO score_overrides(job_id,score,recommendation,reason) VALUES (?,?,?,?)
+        """INSERT INTO score_overrides(job_id,score,recommendation,reason,attended)
+        VALUES (?,?,?,?,?)
         ON CONFLICT(job_id) DO UPDATE SET score=excluded.score,
-        recommendation=excluded.recommendation,reason=excluded.reason,
+        recommendation=excluded.recommendation,reason=excluded.reason,attended=excluded.attended,
         updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')""",
-        (job_id, score, recommendation, reason.strip()),
+        (job_id, score, recommendation, reason.strip(), int(attended)),
     )
     conn.commit()
 
