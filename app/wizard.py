@@ -188,8 +188,16 @@ def setup(cfg: Settings) -> bool:
         )
     if "apply" not in document or _yes("Change the apply settings?"):
         apply = Apply.model_validate(document.get("apply", {}))
-        modes = ["manual", "assisted", "auto", "dry_run"]
-        apply.mode = modes[_pick("Apply mode (assisted/auto use manual handoff until M4):", modes)]
+        modes = {
+            "manual": "opens the job link; you apply yourself",
+            "assisted": "fills the application form; you review and press Submit",
+            "auto": "fills and submits, within the daily limits and active hours",
+            "dry_run": "fills the form and saves a screenshot; never submits",
+        }
+        names = list(modes)
+        apply.mode = names[
+            _pick("How should applications be sent?", [f"{m} — {d}" for m, d in modes.items()])
+        ]
         for field in ("daily_limit", "max_per_run", "min_score"):
             while True:
                 try:
