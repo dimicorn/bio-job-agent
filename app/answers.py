@@ -104,12 +104,38 @@ def add_question(conn, job_id, label, options=None, required=True):
     conn.commit()
 
 
-def plan(cfg, conn, row):
+def identity_values(cfg, profile):
+    """Standard contact values the profile or resume states; empty without a profile."""
+    if profile is None:
+        return {}
+    from app.contact import contact_values
+    from app.resume import resume_text
+
+    try:
+        cv = resume_text(cfg)
+    except (OSError, ValueError):
+        cv = ""
+    return contact_values(profile, cv)
+
+
+def identity_answered(label, values):
+    """Whether a question is a contact field (name, email, phone, ...) the values already fill."""
+    from app.applier import standard_key
+
+    key = standard_key({"label": label, "identity": ""})
+    return bool(key and key not in ("resume", "letter") and values.get(key))
+
+
+def plan(cfg, conn, row, profile=None):
+    """Stored questions with their answers; contact fields the profile or resume fills are left out."""
     bank = load_answers(cfg)
+    known = identity_values(cfg, profile)
     items = []
     for question in conn.execute(
         "SELECT * FROM screening_questions WHERE job_id=? ORDER BY id", (row["id"],)
     ):
+        if identity_answered(question["label"], known):
+            continue  # filled from the profile or resume at fill time; the stored row is kept
         options = json.loads(question["options"])
         value = lookup(bank, row["employer"], question["label"])
         values = value if isinstance(value, list) else [value] if value else []
@@ -136,7 +162,7 @@ def plan(cfg, conn, row):
 
 def snapshot(cfg, conn, profile, row):
     require_reviewed(cfg, profile)
-    items = plan(cfg, conn, row)
+    items = plan(cfg, conn, row, profile)
     warnings = [f"Unanswered: {i['question']}" for i in items if i["required"] and not i["answer"]]
     return save_version(
         cfg,
@@ -150,9 +176,9 @@ def snapshot(cfg, conn, profile, row):
     )
 
 
-def ask_missing(cfg, conn, row, *, interactive=False, output=print):
+def ask_missing(cfg, conn, row, *, profile=None, interactive=False, output=print):
     """List (and, interactively, ask) the questions answers.yaml cannot answer."""
-    for item in plan(cfg, conn, row):
+    for item in plan(cfg, conn, row, profile):
         if item["answer"]:
             continue
         from app.applier import SENSITIVE
@@ -193,5 +219,5 @@ def ask_missing(cfg, conn, row, *, interactive=False, output=print):
 
 def collect(cfg, conn, profile, rows, *, interactive=False, output=print):
     for row in rows:
-        ask_missing(cfg, conn, row, interactive=interactive, output=output)
+        ask_missing(cfg, conn, row, profile=profile, interactive=interactive, output=output)
         snapshot(cfg, conn, profile, row)

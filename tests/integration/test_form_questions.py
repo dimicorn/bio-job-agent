@@ -11,7 +11,7 @@ from test_materials import mock_letters
 
 from app import answers, applications, forms, materials
 from app.applier import FormApplier, FormStop
-from app.contact import contact_values, country_from_place, resume_phones
+from app.contact import contact_values, country_from_place, resume_phones, resume_places
 from app.prepare import prepare_answers, prepare_materials
 from app.settings import Apply, Settings
 from app.sources.base import PublicClient
@@ -165,7 +165,19 @@ def test_contact_values_come_from_the_profile_and_resume_only(profile):
     assert values["phone"] == "+44 20 7946 0000"
     assert values["email"] == "alex@example.org"
     assert values["linkedin"] == "linkedin.com/in/alex-example"
-    assert values["country"] == "" and values["website"] == ""
+    assert values["website"] == ""
+    # A stated "City, Country" place gives the city and country; none stated, none used.
+    assert resume_places(cv) == ["Example City, UK"]
+    assert values["city"] == "Example City, UK" and values["country"] == "United Kingdom"
+    unplaced = contact_values(profile, cv.replace("Example City, UK\n", ""))
+    assert unplaced["city"] == "" and unplaced["country"] == ""
+    assert (
+        contact_values(profile, "# Alex Example\nLocation: Example City, Ireland\n")["country"]
+        == "Ireland"
+    )
+    two_places = cv.replace("Example City, UK", "Example City, UK · Other City, France")
+    assert contact_values(profile, two_places)["country"] == ""  # ambiguous: never pick one
+    assert resume_places("# Alex Example, PhD\nalex@example.org\n") == []
     two = cv.replace("· alex", "· 020 7946 0001 · alex")
     assert contact_values(profile, two)["phone"] == ""  # ambiguous: never pick one
     profile.phone = "+44 1632 960000"
@@ -325,3 +337,90 @@ def test_prepare_continues_when_the_form_cannot_be_read(preparation, conn, monke
     assert not conn.execute(
         "SELECT 1 FROM screening_questions WHERE job_id=?", (row["id"],)
     ).fetchone()
+
+
+CONTACT_RESUME = (
+    "# Alex Example\n+44 20 7946 0000 · alex@example.org · linkedin.com/in/alex-example\n\n"
+    "## Experience\nDeveloped cell assays.\n\n## Skills\nPython analysis.\n\n"
+    "## Education\nBSc at Example University.\n"
+)
+
+
+def store_stale(conn, row):
+    """Identity rows a browser fill stored before the resume's contact details were read."""
+    for label, required in (
+        ("Phone", True),
+        ("Country*", True),
+        ("LinkedIn Profile", False),
+        ("Website", False),
+        ("What is your current notice period?", False),
+    ):
+        answers.add_question(conn, row["id"], label, [], required)
+
+
+def test_stored_identity_questions_the_resume_answers_are_not_asked(preparation, conn):
+    cfg, profile, rows = preparation
+    row = rows[0]
+    cfg.resume_path.write_text(CONTACT_RESUME)
+    store_stale(conn, row)
+    answers.save_answer(cfg, "Phone", "+44 1632 960000")  # the user's answer is kept as it is
+    asked = [i["question"] for i in answers.plan(cfg, conn, row, profile)]
+    # No profile or resume place states a country, so Country is still asked.
+    assert asked == ["Country*", "Website", "What is your current notice period?"]
+    said = []
+    answers.ask_missing(cfg, conn, row, profile=profile, output=said.append)
+    assert not any("Phone" in s or "LinkedIn" in s for s in said)
+    assert any("Country*" in s for s in said)
+
+    cfg.resume_path.write_text(CONTACT_RESUME.replace("\n+44", "\nExample City, UK\n+44"))
+    asked = [i["question"] for i in answers.plan(cfg, conn, row, profile)]
+    assert asked == ["Website", "What is your current notice period?"]
+    profile.website = "https://alex.example.org"
+    assert [i["question"] for i in answers.plan(cfg, conn, row, profile)] == [
+        "What is your current notice period?"
+    ]
+    # The stored rows and the user's stored answer are never deleted.
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM screening_questions WHERE job_id=?", (row["id"],)
+        ).fetchone()[0]
+        == 5
+    )
+    assert yaml.safe_load(Path(cfg.apply.answers_file).read_text()) == {"Phone": "+44 1632 960000"}
+    # Without a profile nothing is filtered (the identity values are unknown).
+    assert len(answers.plan(cfg, conn, row)) == 5
+
+
+def test_prepare_skips_stale_identity_questions_and_reads_phone_from_resume(
+    preparation, conn, monkeypatch
+):
+    cfg, profile, rows = preparation
+    mock_letters(monkeypatch, [])
+    cfg.resume_path.write_text(CONTACT_RESUME)
+    profile.resume_hash = resume_digest(cfg)
+    row = rows[0]
+    row["apply_url"] = GREENHOUSE
+    store_stale(conn, row)
+    result, _, said = prepare(
+        cfg, conn, profile, row, recorded([]), interactive=True, replies=[""] * 10
+    )
+    labels_asked = [s for s in said if s.startswith(f"{row['id']} ")]
+    assert not any(": Phone" in s or ": LinkedIn Profile" in s for s in labels_asked)
+    assert any(s.endswith(": Country*") for s in labels_asked)
+    stored = {
+        r["label"]
+        for r in conn.execute("SELECT label FROM screening_questions WHERE job_id=?", (row["id"],))
+    }
+    # The form's phone is filled from the resume, so it is not registered again; the
+    # synthetic Greenhouse Country selector is, because nothing states a country.
+    assert "Country" in stored
+    assert {i["question"] for i in result.unanswered} >= {"Country", "Country*"}
+    assert not {"Phone", "LinkedIn Profile"} & {i["question"] for i in result.unanswered}
+    draft = yaml.safe_load(materials.latest(conn, row["id"], "answers")["content"])["items"]
+    assert not {"Phone", "LinkedIn Profile"} & {i["question"] for i in draft}
+
+
+def resume_digest(cfg):
+    from app import resume
+
+    return resume.digest(resume.resume_text(cfg))
