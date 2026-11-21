@@ -7,10 +7,11 @@ filter.
 
 ## Where it shows
 
-- `list`: a **Resume keywords** column, for example `62% (8/13)` and the first three missing
-  keywords. `no resume.md` means there is nothing to compare against.
-- `review`: the percentage with the counts, then up to eight keywords found in the resume and up
-  to eight missing ones, most-mentioned first.
+- `list`: a **KW** column with the percentage, for example `62%`; `no cv` means there is no
+  `resume.md` to compare against.
+- `review`: the percentage with the counts on the card; **x** lists the keywords found in the
+  resume and the missing ones, most-mentioned first.
+- `show <job>` (and `list --details`): the same keyword lists.
 - `export`: `keyword_match` (the percentage), `keywords_present` and `keywords_missing`
   (all of them, separated by `; `).
 

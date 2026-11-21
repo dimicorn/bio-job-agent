@@ -60,8 +60,12 @@ def test_list_filters_export_stats(configured, profile, sources, transport):
         discover(conn, profile, sources, transport=transport, pause=lambda _: None)
     assert cli.main(["list", "--all-scores"]) == 0
     assert "Principal Scientist" in output.getvalue()
-    assert "https://" in output.getvalue()
-    assert "Posted / discovered" in output.getvalue()
+    assert "Posted" in output.getvalue() and "Details: bio-jobs show <ID>" in output.getvalue()
+    output.seek(0)
+    output.truncate(0)
+    assert cli.main(["show", "1"]) == 0
+    assert "Apply: https://" in output.getvalue() and "Origin " in output.getvalue()
+    assert cli.main(["show", "999"]) == 1
     output.seek(0)
     output.truncate(0)
     assert cli.main(["list", "--title", "no such role"]) == 0
@@ -487,13 +491,17 @@ def test_keyword_match_in_list_export_and_review(
     with connect(cfg.database_path) as conn:
         discover(conn, profile, sources, transport=transport, pause=lambda _: None)
     assert cli.main(["list", "--all-scores"]) == 0
-    assert "Resume keywords" in output.getvalue() and "no resume.md" in output.getvalue()
+    assert "KW" in output.getvalue() and "no cv" in output.getvalue()
 
     cfg.resume_path.write_text("# Synthetic\nDrug discovery scientist.", encoding="utf-8")
     output.seek(0)
     output.truncate(0)
     assert cli.main(["list", "--all-scores"]) == 0
     # Synthetic fixtures mention drug discovery and a multidisciplinary team.
+    assert "25%" in output.getvalue() and "cross-functional" not in output.getvalue()
+    output.seek(0)
+    output.truncate(0)
+    assert cli.main(["list", "--all-scores", "--details"]) == 0
     assert "25% (1/4)" in output.getvalue() and "cross-functional" in output.getvalue()
     with connect(cfg.database_path) as conn:
         cached = conn.execute("SELECT count(*) FROM keyword_matches").fetchone()[0]
@@ -509,7 +517,10 @@ def test_keyword_match_in_list_export_and_review(
     monkeypatch.setattr(cli, "read_key", lambda: "q")
     output.seek(0)
     output.truncate(0)
+    keys = iter("xlxq")
+    monkeypatch.setattr(cli, "read_key", lambda: next(keys))
     assert cli.main(["review", "--all-scores"]) == 0
     text = output.getvalue()
+    assert "resume keywords 25% (1/4)" in text
     assert "Resume keywords:" in text and "not part of the score" in text
     assert "In resume: drug discovery" in text

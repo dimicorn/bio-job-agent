@@ -12,13 +12,14 @@
 | `scan` | Sync, then score eligible jobs with missing or stale evaluations |
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
-| `list` | Highest fit score first; score, evidence, gaps, uncertainty, resume keyword match, dates and apply link |
+| `list [--details]` | Highest fit score first, one line per job sized to the terminal: rank, ID, title, employer, location, posting date (`stale`/`closed` tags), review or application status (`(cd)` company cooldown), score with recommendation (`*` your override), confidence, resume keyword match and an `open` apply link; `--details` adds each job's explanation below |
+| `show <job> [--full]` | One job without prompts: evidence, gaps, must-haves to check, uncertainties (each stated once), resume keywords present and missing, apply link and origins; `--full` adds dimension scores, must-have evidence, the job description and the letter with its cited facts |
 | `prepare <job>` | Create any missing or stale letter and screening draft, check the resume PDF; show the letter claims; read the application form's questions and ask those `answers.yaml` cannot answer |
 | `resume` | Check the resume PDF that applications upload unchanged |
 | `resume-from-pdf [--pdf path] [--force]` | Write `resume.md` from the resume PDF's text; never replaces a filled `resume.md` without `--force` |
 | `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
 | `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
-| `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |
+| `review` | A one-screen card per job (heading, score, keyword match, top evidence, gaps, must-haves and uncertainties, material warnings); **i** job description, **x** full explanation with dimension and must-have evidence, **c** letter with its claims and cited facts, **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve (shows the letter and its claims first), **q** quit |
 | `letters`, `letter-pdf`, `answers`, `diff`, `import`, `state` | Optionally redo one material, compare, import and track application materials ([docs/applications.md](applications.md)) |
 | `unmerge JOB ORIGIN` | Separate a non-canonical origin from a grouped job |
 | `feed-review <feed.json>` | Experimental offline lead review ([docs/feed-review.md](feed-review.md)) |

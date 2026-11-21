@@ -35,7 +35,8 @@ your resume PDF as-is. See [local storage and privacy](docs/operation.md#privacy
 
 ```sh
 uv run bio-jobs scan     # refresh listings and score eligible jobs
-uv run bio-jobs list     # show matches and their evidence
+uv run bio-jobs list     # one line per match: score, status, keyword match
+uv run bio-jobs show 12  # one job's evidence, gaps, must-haves and keywords
 uv run bio-jobs review   # review jobs and prepare applications
 ```
 
@@ -48,7 +49,7 @@ installed Chrome on a private profile and require explicit approval for each job
 submitting. See [applications](docs/applications.md).
 
 To add a posting you found yourself, run `uv run bio-jobs add <url>`; it is stored,
-scored, and kept in review. `list` and `review` also show a
+scored, and kept in review. `list`, `show` and `review` also show a
 [resume keyword match](docs/keywords.md) computed without an LLM. See
 [search and scoring](docs/search.md#add-one-job-by-link).
 
