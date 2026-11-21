@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from app import answers, materials
+from app import answers, forms, materials
 from app.candidate.profile import import_profile
 from app.resume import digest, require_reviewed
 
@@ -23,6 +23,7 @@ class Prepared:
     current: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     unanswered: list[dict] = field(default_factory=list)
+    form_read: bool = False
 
 
 def edited_message(row, kind):
@@ -100,13 +101,26 @@ def prepare_materials(cfg, conn, profile, row, *, output=print):
     return result
 
 
-def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print):
-    """Ask only what answers.yaml cannot answer, then refresh the draft if it is out of date."""
+def prepare_answers(cfg, conn, profile, row, result, *, interactive, output=print, read_form=None):
+    """Read the form's questions, ask only what answers.yaml cannot answer, then refresh the draft."""
     version = import_profile(conn, profile)
     found, item = status(conn, row, "answers", version)
     if found == "edited":
         result.problems.append(edited_message(row, "answers"))
         return result
+    resume = materials.latest(conn, row["id"], "resume")
+    result.form_read = (
+        forms.refresh(
+            cfg,
+            conn,
+            profile,
+            row,
+            cv=resume["content"] if resume else "",
+            output=output,
+            read=read_form or forms.read_form,
+        )
+        is not None
+    )
     if interactive and any(not i["answer"] for i in answers.plan(cfg, conn, row)):
         output("Screening questions the answer bank cannot answer:")
         answers.ask_missing(cfg, conn, row, interactive=True, output=output)

@@ -72,7 +72,7 @@ uv run bio-jobs prepare 42               # everything missing or stale, then the
 uv run bio-jobs review --status saved    # or press a on the job: it prepares first, then approves
 ```
 
-`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its ATS check and the screening draft, but only for pieces that are missing or stale; current materials stay as they are. It then shows the letter with each claim and its cited facts, plus any warnings, and asks only the screening questions `answers.yaml` cannot answer. Without an interactive terminal it prepares what it can, lists the unanswered questions and prints the command to run in a terminal.
+`prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its ATS check and the screening draft, but only for pieces that are missing or stale; current materials stay as they are. It then shows the letter with each claim and its cited facts, plus any warnings. Before any browser opens it reads the job's application form (Greenhouse, Lever and Workable; GET only, robots-respecting; Ashby's form API is robots-disallowed) and asks every required question and every optional one `answers.yaml` cannot answer, saving your answers for reuse. Contact fields come from your profile and resume, never the LLM. If the form cannot be read it says so and carries on. Without an interactive terminal it prepares what it can, lists the unanswered questions and prints the command to run in a terminal.
 
 The single commands are optional, for redoing one piece:
 
@@ -116,7 +116,7 @@ Sensitive questions (visa, work authorization, legal declarations, demographics,
 | `watch [--scheduled]` | One locked sync, score, digest and new/changed-job alert pass; scheduled runs also consume the approved queue only in auto mode |
 | `analyze` | Score stored eligible jobs without fetching sources |
 | `list` | Highest fit score first; score, evidence, gaps, uncertainty, dates and apply link |
-| `prepare <job>` | Create any missing or stale letter, resume, resume PDF (with ATS check) and screening draft; show the letter claims; ask only the screening questions `answers.yaml` cannot answer |
+| `prepare <job>` | Create any missing or stale letter, resume, resume PDF (with ATS check) and screening draft; show the letter claims; read the application form's questions and ask those `answers.yaml` cannot answer |
 | `apply [job]` | Fill one approved job or the approved queue in the configured apply mode |
 | `autopilot` / `run [--no-scan]` | One bounded auto pass; refresh and score first unless `--no-scan` |
 | `review` | **o** open, **s** save, **r** reject, **l** later, **v** override score/recommendation with a reason, **a** prepare and approve, **q** quit; shows dimension and must-have evidence |

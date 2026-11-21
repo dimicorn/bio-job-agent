@@ -16,10 +16,43 @@ uv run bio-jobs review                  # or simply press a on the job: it prepa
 `prepare` (and `a` in review) writes the cover letter, tailored resume, resume PDF with its
 ATS check and the screening draft, but only for pieces that are missing or stale; current
 materials stay as they are, with no new versions. It then shows the letter with each claim
-and its cited facts, plus any warnings, and asks only the screening questions the answer
-bank cannot answer. Without an interactive terminal it prepares everything it can, lists
-the unanswered questions and prints the command to run in a terminal. A material file you
-edited is never replaced: preparation stops with the `import` command to run first.
+and its cited facts, plus any warnings. Before any browser opens it reads the job's
+application form (see [Form questions at preparation](#form-questions-at-preparation)),
+then asks every required question and every optional one the answer bank cannot answer,
+listing the form's options. Without an interactive terminal it prepares everything it can,
+lists the unanswered questions and prints the command to run in a terminal. A material file
+you edited is never replaced: preparation stops with the `import` command to run first.
+
+### Form questions at preparation
+
+Preparation reads the form with GET requests only, through the same robots.txt checks and
+per-host pacing as discovery; nothing is posted or submitted:
+
+| ATS | Source |
+| --- | --- |
+| Greenhouse | public job-board API, `…/jobs/<id>?questions=true`; the hosted form's Country selector next to Phone is added as a required question |
+| Lever | the public `…/apply` form page |
+| Workable | the public form API, `apply.workable.com/api/v1/jobs/<shortcode>/form` |
+| Ashby | not read: its form API is under `jobs.ashbyhq.com/api/`, which robots.txt disallows |
+
+The questions are stored for the job, so `answers` and approval know them. Your answers
+are saved to `answers.yaml` and reused by later jobs with the same questions, exactly as
+`answers` does. Declarations, consent and other sensitive questions are asked too, marked
+as only yours to answer; the LLM never answers them. Files (resume, cover letter) and
+optional equal-opportunity surveys are not asked.
+
+Standard contact fields are filled from your reviewed profile and resume, never from the
+LLM: name, email, phone, city, LinkedIn, GitHub and website from the profile, or from the
+resume when it states exactly one email, phone (a `Phone:` line or the contact header), LinkedIn or
+GitHub link. Country comes from the profile's `city` when it ends in a country
+(`London, UK`) or from a stored `Country` answer. A contact field with no such value is
+asked like any other question; nothing is invented.
+
+If the form cannot be read (network error, HTTP error, robots.txt, Ashby or an unsupported
+site), preparation says so plainly and carries on; the browser fill reads the live form as
+before and queues any new questions for `bio-jobs answers --job <id>`. Required questions
+still unanswered become warnings on the screening draft, so approval asks you to accept
+them by typing `approve` rather than pinning them silently.
 
 The single commands remain for redoing one piece:
 
@@ -71,7 +104,8 @@ Profile extraction leaves a missing or unsupported header name empty and lists i
 
 ## Screening answers bank
 
-Browser filling queues unknown questions for `answers`; you can also register them manually:
+Preparation stores the questions it reads from the form, and browser filling queues any
+others it finds, for `answers`; you can also register them manually:
 
 ```bash
 uv run bio-jobs answers --job 42 --add 'Do you require visa sponsorship?' --option Yes --option No --show
@@ -164,7 +198,8 @@ Changed or unsupported widgets stop for manual handling. No live employer submis
 Greenhouse questions are fetched from its public job-board API with robots checks and
 request pacing, then matched to the embedded application form. A mismatch stops the job.
 The shared planner uses profile contacts and links, the approved CV and cover letter, then
-employer-specific or global `answers.yaml` entries. Optional single-option consent can be
+employer-specific or global `answers.yaml` entries. A contact field (phone, country, links)
+with none of these values is queued for you; it is never sent to the LLM. Optional single-option consent can be
 enabled with `auto_consent`. It then asks the configured LLM once for remaining questions,
 using the approved CV, reviewed facts and stored answers; unsupported questions are queued.
 Options must match the form. Visa, work authorization, legal declarations, demographics and

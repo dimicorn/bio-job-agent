@@ -30,6 +30,17 @@ def offline_network(request, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", blocked)
 
 
+@pytest.fixture(autouse=True)
+def offline_forms(monkeypatch):
+    """Preparation reads application forms over HTTP; tests opt in with a recorded reader."""
+    from app import forms
+
+    def unavailable(cfg, url, client=None):
+        raise forms.FormUnavailable("offline test")
+
+    monkeypatch.setattr(forms, "read_form", unavailable)
+
+
 @pytest.fixture
 def profile():
     return load_profile(ROOT / "config/candidate.example.yaml")

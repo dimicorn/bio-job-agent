@@ -2,7 +2,6 @@
 
 import fcntl
 import json
-import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -116,6 +115,7 @@ def finish(conn, row, attempt, status, reason):
 
 def values_for(conn, profile, ids):
     from app.candidate.profile import require_name
+    from app.contact import contact_values
 
     require_name(profile)
     versions = {
@@ -124,23 +124,9 @@ def values_for(conn, profile, ids):
         )
         for kind, version in ids.items()
     }
-    cv = versions["resume"]["content"]
-    # Contact values must already exist in the approved resume or explicit answer bank.
-    emails = set(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", cv))
-    phones = re.findall(
-        r"(?m)^\s*(?:Phone|Tel|Mobile)\s*:\s*([+\d][\d ()+.-]{6,})\s*$", cv, re.IGNORECASE
-    )
-    names = profile.name.split()
+    # Contact values must already exist in the profile, approved resume or explicit answer bank.
     return {
-        "first_name": profile.first_name or (names[0] if names else ""),
-        "last_name": profile.last_name or " ".join(names[1:]),
-        "full_name": profile.name,
-        "email": profile.email or (next(iter(emails)) if len(emails) == 1 else ""),
-        "phone": profile.phone or (phones[0].strip() if len(phones) == 1 else ""),
-        "city": profile.city,
-        "linkedin": profile.linkedin,
-        "github": profile.github,
-        "website": profile.website,
+        **contact_values(profile, versions["resume"]["content"]),
         "resume": versions["resume"]["pdf_path"],
         "letter": versions["letter"]["content"],
     }, versions

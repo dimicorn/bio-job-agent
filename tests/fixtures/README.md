@@ -15,3 +15,5 @@ Additional source fixtures (2026-11-15):
 - `ashby.json`: metadata subset of the public Voleon Posting API recording in quant-job-agent's `tests/fixtures/ashby_board.json`, from `https://api.ashbyhq.com/posting-api/job-board/voleon`. Descriptions are synthetic. This is a reference recording, not a recording of a watchlist employer. The financial employer is only parser test data.
 
 `firms.yaml` is the active watchlist; `bio-jobs firms --validate` checks public access, payloads and employer identity without opening the local database. Site snapshots preserve public text/link changes in `raw_postings`; they are for manual review and do not claim that the page itself is a scientist vacancy.
+
+Form question fixtures (`form_api/`, 2026-11-21) are synthetic. Their structure follows the public Greenhouse `?questions=true` response, the Lever `…/apply` page markup and the Workable `api/v1/jobs/<shortcode>/form` response; every label, option, ID and URL is invented.
