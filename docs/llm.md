@@ -1,6 +1,6 @@
 # Structured LLM backends
 
-Run `./setup.sh` once, or `uv run bio-jobs setup` to change settings. The wizard writes `analyst:` to gitignored `config.yaml`, keeps credentials in the project's gitignored `.env` (mode 600), imports the candidate example, and checks the primary and optional fallback independently. Existing profile files are never overwritten. Environment variables take precedence over `.env`; `.env` is parsed as data, never sourced by a shell.
+Run `./setup.sh` once, or `uv run bio-jobs setup` to change settings. The wizard writes `analyst:` to gitignored `config.yaml`, keeps credentials in the project's gitignored `.env` (mode 600), imports the candidate example, and checks the primary and optional fallback independently. Existing profile files are never overwritten. See [config.example.yaml](../config.example.yaml) for the full configuration. Environment variables take precedence over `.env`; `.env` is parsed as data, never sourced by a shell.
 
 | Backend | Configuration / requirement |
 | --- | --- |
@@ -12,7 +12,7 @@ Run `./setup.sh` once, or `uv run bio-jobs setup` to change settings. The wizard
 | `pi` | Installed Pi, `provider`, `model`; credentials through its auth or `.env` |
 | `command` | `command`: prompt on stdin, one JSON object on stdout; no shell expansion |
 
-Discovery and terminal review do not call the LLM. `extract-profile` extracts resume facts for mandatory factual review; formatting differences in supporting excerpts are normalized, unsupported facts are dropped and counted, and saved evidence comes from the resume; `analyze` scores stored eligible jobs and `scan` syncs then scores. These commands send candidate data to the configured backend. Document drafts remain deferred. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` groups usage and known costs by backend, model and purpose, including scoring.
+Discovery does not call the LLM. Review can call it when preparing or rewriting application materials. `extract-profile` extracts resume facts for mandatory factual review; formatting differences in supporting excerpts are normalized, unsupported facts are dropped and counted, and saved evidence comes from the resume; `analyze` scores stored eligible jobs and `scan` syncs then scores. These commands send candidate data to the configured backend. See [application materials](applications.md#preparing-materials) for letter drafting. Use `uv run bio-jobs llm-check` for one tiny structured request; `doctor` is offline unless `--online` is explicit. `stats` groups usage and known costs by backend, model and purpose, including scoring.
 
 ## DeepSeek: direct API
 

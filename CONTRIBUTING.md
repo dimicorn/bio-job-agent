@@ -17,7 +17,7 @@ uv run pytest
 ```
 
 Default tests are offline; live checks are opt-in (see the
-[README](README.md#development-and-tests)). The GitHub Actions
+[development docs](docs/development.md)). The GitHub Actions
 [tests workflow](.github/workflows/tests.yml) runs the same checks as the `test` job on every
 push and pull request.
 
